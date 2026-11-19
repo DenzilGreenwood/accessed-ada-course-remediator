@@ -38,7 +38,6 @@ import {
   updateLinkTextInHtml,
 } from './engine/remediator';
 import { exportRemediatedPackage } from './engine/imscc';
-import { generateComplianceReportMarkdown } from './engine/report';
 import { generatePlainLanguageSummaryWithAi } from './engine/aiEnhancer';
 import { attachCaptionsAndTranscriptToHtml } from './engine/captions';
 import {
@@ -54,6 +53,7 @@ import { PreviewPane } from './components/PreviewPane';
 import { AssistiveStudio } from './components/AssistiveStudio';
 import { VideoStudio } from './components/VideoStudio';
 import { AiSettingsModal } from './components/AiSettingsModal';
+import { ReportExportModal } from './components/ReportExportModal';
 import { buildSampleCourse } from './data/sampleCourse';
 
 const AI_STORAGE_KEY = 'accessed_ai_config_v1';
@@ -100,6 +100,7 @@ export default function App() {
   const [options, setOptions] = useState<RemediationOptions>(DEFAULT_REMEDIATION_OPTIONS);
   const [aiConfig, setAiConfig] = useState<AiConfig>(loadAiConfig);
   const [showAiModal, setShowAiModal] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [copiedHtml, setCopiedHtml] = useState(false);
   const [copiedLmsHtml, setCopiedLmsHtml] = useState(false);
@@ -323,11 +324,7 @@ export default function App() {
 
   function handleExportReport() {
     if (!course) return;
-    const md = generateComplianceReportMarkdown(course);
-    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
-    const base = course.originalFileName.replace(/\.(imscc|zip|html?)$/i, '');
-    downloadBlob(blob, `${base}-ada-compliance-report.md`);
-    setStatusMessage('Downloaded ADA Title II / WCAG 2.1 AA Compliance Report.');
+    setShowReportModal(true);
   }
 
   async function handleCopyHtml() {
@@ -1131,6 +1128,14 @@ export default function App() {
           config={aiConfig}
           onSave={handleSaveAiConfig}
           onClose={() => setShowAiModal(false)}
+        />
+      )}
+
+      {showReportModal && course && (
+        <ReportExportModal
+          course={course}
+          onClose={() => setShowReportModal(false)}
+          onDownloaded={(msg) => setStatusMessage(msg)}
         />
       )}
     </div>
