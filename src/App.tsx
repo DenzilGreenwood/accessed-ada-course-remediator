@@ -42,23 +42,9 @@ import {
   updateImageAltInHtml,
   updateLinkTextInHtml,
 } from './engine/remediator';
-import { createCoursePage, exportRemediatedPackage } from './engine/imscc';
+import { exportRemediatedPackage } from './engine/imscc';
 import { generateComplianceReportMarkdown } from './engine/report';
-import {
-  generateOfficeImageAltWithAi,
-  generatePlainLanguageSummaryWithAi,
-  isVisionAiReady,
-} from './engine/aiEnhancer';
-import {
-  convertPdfToAccessibleHtml,
-  type PdfConversionProgress,
-} from './engine/pdfRemediator';
-import {
-  applyOfficeImageFixes,
-  extractOfficeHtmlOutline,
-  inspectOfficeImages,
-  type OfficeImageItem,
-} from './engine/officeRemediator';
+import { generatePlainLanguageSummaryWithAi } from './engine/aiEnhancer';
 import { attachCaptionsAndTranscriptToHtml } from './engine/captions';
 import {
   clearWorkspaceFromDb,
@@ -73,6 +59,7 @@ import { PreviewPane } from './components/PreviewPane';
 import { AssistiveStudio } from './components/AssistiveStudio';
 import { VideoStudio } from './components/VideoStudio';
 import { AiSettingsModal } from './components/AiSettingsModal';
+import { ReportExportModal } from './components/ReportExportModal';
 import { buildSampleCourse } from './data/sampleCourse';
 
 const AI_STORAGE_KEY = 'accessed_ai_config_v1';
@@ -119,6 +106,7 @@ export default function App() {
   const [options, setOptions] = useState<RemediationOptions>(DEFAULT_REMEDIATION_OPTIONS);
   const [aiConfig, setAiConfig] = useState<AiConfig>(loadAiConfig);
   const [showAiModal, setShowAiModal] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [copiedHtml, setCopiedHtml] = useState(false);
   const [copiedLmsHtml, setCopiedLmsHtml] = useState(false);
@@ -414,17 +402,17 @@ export default function App() {
         attachments: (course.attachments || []).map((a) =>
           a.id === att.id
             ? {
-                ...a,
-                status: 'ok',
-                remediated: true,
-                remediatedNote: 'Remediated via Companion HTML Page',
-                companionPagePath: companionPath,
-                summary: `Remediated via Companion HTML Page (${res.pageCount} page${res.pageCount === 1 ? '' : 's'}, ${res.method === 'vision-ai' ? 'Vision AI' : 'Offline OCR'})`,
-                details: [
-                  `Generated accessible HTML page: ${companionPath}`,
-                  ...a.details,
-                ],
-              }
+              ...a,
+              status: 'ok',
+              remediated: true,
+              remediatedNote: 'Remediated via Companion HTML Page',
+              companionPagePath: companionPath,
+              summary: `Remediated via Companion HTML Page (${res.pageCount} page${res.pageCount === 1 ? '' : 's'}, ${res.method === 'vision-ai' ? 'Vision AI' : 'Offline OCR'})`,
+              details: [
+                `Generated accessible HTML page: ${companionPath}`,
+                ...a.details,
+              ],
+            }
             : a
         ),
       });
@@ -531,18 +519,18 @@ export default function App() {
         attachments: (course.attachments || []).map((a) =>
           a.id === att.id
             ? {
-                ...a,
-                status: remainingMissing === 0 ? 'ok' : 'critical',
-                remediated: remainingMissing === 0,
-                remediatedNote:
-                  remainingMissing === 0
-                    ? 'Patched in-place in .imscc export'
-                    : `${remainingMissing} image(s) still missing alt text`,
-                summary:
-                  remainingMissing === 0
-                    ? `${kind.toUpperCase()} — All ${updatedImgs.length} image(s) labeled in-place`
-                    : `${kind.toUpperCase()} — ${remainingMissing} image(s) still missing alt text`,
-              }
+              ...a,
+              status: remainingMissing === 0 ? 'ok' : 'critical',
+              remediated: remainingMissing === 0,
+              remediatedNote:
+                remainingMissing === 0
+                  ? 'Patched in-place in .imscc export'
+                  : `${remainingMissing} image(s) still missing alt text`,
+              summary:
+                remainingMissing === 0
+                  ? `${kind.toUpperCase()} — All ${updatedImgs.length} image(s) labeled in-place`
+                  : `${kind.toUpperCase()} — ${remainingMissing} image(s) still missing alt text`,
+            }
             : a
         ),
       });
@@ -573,12 +561,12 @@ export default function App() {
         attachments: (course.attachments || []).map((a) =>
           a.id === att.id
             ? {
-                ...a,
-                companionPagePath: companionPath,
-                remediatedNote: a.remediatedNote
-                  ? `${a.remediatedNote}; HTML outline extracted`
-                  : 'Accessible HTML outline extracted',
-              }
+              ...a,
+              companionPagePath: companionPath,
+              remediatedNote: a.remediatedNote
+                ? `${a.remediatedNote}; HTML outline extracted`
+                : 'Accessible HTML outline extracted',
+            }
             : a
         ),
       });
@@ -649,11 +637,7 @@ export default function App() {
 
   function handleExportReport() {
     if (!course) return;
-    const md = generateComplianceReportMarkdown(course);
-    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
-    const base = course.originalFileName.replace(/\.(imscc|zip|html?)$/i, '');
-    downloadBlob(blob, `${base}-ada-compliance-report.md`);
-    setStatusMessage('Downloaded ADA Title II / WCAG 2.1 AA Compliance Report.');
+    setShowReportModal(true);
   }
 
   async function handleCopyHtml() {
@@ -1015,13 +999,12 @@ export default function App() {
                           <div className="page-item-top">
                             <span className="page-item-title">{p.title}</span>
                             <span
-                              className={`badge ${
-                                remCount === 0
+                              className={`badge ${remCount === 0
                                   ? 'badge-success'
                                   : p.remediatedAudit.counts.critical > 0
                                     ? 'badge-critical'
                                     : 'badge-serious'
-                              }`}
+                                }`}
                             >
                               {remCount === 0 ? 'Pass' : `${remCount}`}
                             </span>
@@ -1326,13 +1309,12 @@ export default function App() {
                               </div>
                               <div className="issue-tags">
                                 <span
-                                  className={`badge ${
-                                    att.status === 'critical'
+                                  className={`badge ${att.status === 'critical'
                                       ? 'badge-critical'
                                       : att.status === 'review'
                                         ? 'badge-serious'
                                         : 'badge-success'
-                                  }`}
+                                    }`}
                                 >
                                   {att.status === 'critical' ? (
                                     <AlertCircle size={12} aria-hidden="true" />
@@ -1659,6 +1641,14 @@ export default function App() {
           config={aiConfig}
           onSave={handleSaveAiConfig}
           onClose={() => setShowAiModal(false)}
+        />
+      )}
+
+      {showReportModal && course && (
+        <ReportExportModal
+          course={course}
+          onClose={() => setShowReportModal(false)}
+          onDownloaded={(msg) => setStatusMessage(msg)}
         />
       )}
     </div>

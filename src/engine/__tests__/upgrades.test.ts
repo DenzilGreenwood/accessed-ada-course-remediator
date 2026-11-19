@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { generateLmsSafeHtml, remediateHtml } from '../remediator';
 import { auditPdfBuffer } from '../attachments';
 import { exportWorkspaceFile, importWorkspaceFile } from '../storage';
-import { generateComplianceReportMarkdown } from '../report';
+import {
+  generateComplianceReportCsv,
+  generateComplianceReportDocx,
+  generateComplianceReportHtml,
+  generateComplianceReportJson,
+  generateComplianceReportMarkdown,
+  generateComplianceReportPdf,
+} from '../report';
 import { estimateAiCostLabel } from '../aiEnhancer';
 import { DEFAULT_REMEDIATION_OPTIONS } from '../../types';
 import { buildSampleCourse } from '../../data/sampleCourse';
@@ -72,5 +79,46 @@ describe('Client-Side Classroom Upgrades', () => {
   it('estimates BYOK AI cost cleanly including free Chrome Built-In AI', () => {
     expect(estimateAiCostLabel(24, 'chrome-nano')).toContain('Free');
     expect(estimateAiCostLabel(24, 'gemini')).toContain('<$0.01');
+  });
+
+  it('exports ADA Compliance Reports in PDF, DOCX, CSV, HTML, Markdown, and JSON', async () => {
+    const pkg = buildSampleCourse();
+    pkg.attachments = [
+      auditPdfBuffer(
+        'files/scanned-reading.pdf',
+        strToBuffer('%PDF-1.4\n/Subtype /Image\n%%EOF')
+      ),
+    ];
+
+    // HTML
+    const html = generateComplianceReportHtml(pkg);
+    expect(html).toContain('<!doctype html>');
+    expect(html).toContain('scanned-reading.pdf');
+
+    // CSV
+    const csv = generateComplianceReportCsv(pkg);
+    expect(csv).toContain('Category,Page / File Path');
+    expect(csv).toContain('CRITICAL BARRIER');
+
+    // JSON
+    const parsedJson = JSON.parse(generateComplianceReportJson(pkg));
+    expect(parsedJson.summary.criticalAttachments).toBe(1);
+    expect(parsedJson.pages).toHaveLength(pkg.pages.length);
+
+    // PDF
+    const pdfBlob = generateComplianceReportPdf(pkg);
+    expect(pdfBlob.type).toBe('application/pdf');
+    const pdfText = await new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.readAsText(pdfBlob);
+    });
+    expect(pdfText.startsWith('%PDF-1.4')).toBe(true);
+    expect(pdfText).toContain('ADA Title II & WCAG 2.1 AA Course Remediation Report');
+    expect(pdfText).toContain('%%EOF');
+
+    // DOCX
+    const docxBlob = await generateComplianceReportDocx(pkg);
+    expect(docxBlob.size).toBeGreaterThan(200);
   });
 });
