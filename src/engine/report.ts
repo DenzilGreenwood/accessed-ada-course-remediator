@@ -81,14 +81,18 @@ export function generateComplianceReportMarkdown(pkg: CoursePackage): string {
       `| --- | --- | --- | --- | --- |`
     );
     for (const att of attachments) {
-      const statusLabel =
-        att.status === 'critical'
+      const statusLabel = att.remediated
+        ? 'REMEDIATED'
+        : att.status === 'critical'
           ? 'CRITICAL BARRIER'
           : att.status === 'review'
             ? 'NEEDS REVIEW'
             : 'TAGGED / OK';
+      const finding = att.remediatedNote
+        ? `${att.summary} — ${att.remediatedNote}${att.companionPagePath ? ` (\`${att.companionPagePath}\`)` : ''}`
+        : att.summary;
       lines.push(
-        `| \`${att.path}\` | ${att.kind.toUpperCase()} | **${statusLabel}** | ${att.wcagCriterion} | ${att.summary} |`
+        `| \`${att.path}\` | ${att.kind.toUpperCase()} | **${statusLabel}** | ${att.wcagCriterion} | ${finding} |`
       );
     }
   }

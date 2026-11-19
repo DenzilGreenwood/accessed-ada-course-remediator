@@ -34,7 +34,9 @@ export type RuleId =
   | 'audio-transcript'
   | 'deprecated-distracting'
   | 'positive-tabindex'
-  | 'viewport-zoom';
+  | 'viewport-zoom'
+  | 'ascii-diagram'
+  | 'raw-latex';
 
 export interface AuditIssue {
   id: string;
@@ -115,6 +117,9 @@ export interface AttachmentAudit {
   summary: string;
   details: string[];
   wcagCriterion: string;
+  remediated?: boolean;
+  remediatedNote?: string;
+  companionPagePath?: string;
 }
 
 export interface CourseContext {
@@ -144,6 +149,8 @@ export interface CoursePackage {
   zipArrayBuffer?: ArrayBuffer;
   /** Extra generated/uploaded assets (e.g. .vtt caption files) bundled on export */
   extraFiles?: Record<string, string>;
+  /** Patched binary assets (e.g. repaired .pptx/.docx files) bundled on export */
+  extraBinaryFiles?: Record<string, Uint8Array>;
   /** Audited non-HTML attachments inside the .imscc/.zip (PDFs, PowerPoints, Word docs) */
   attachments?: AttachmentAudit[];
   /** Subject & academic level used to tailor AI alt-text and plain-language prompts */

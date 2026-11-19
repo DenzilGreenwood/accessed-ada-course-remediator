@@ -321,3 +321,238 @@ export async function transcribeVideoWithGemini(
     compressionNote,
   };
 }
+
+function parseDataUrl(dataUrl: string): { mimeType: string; base64: string } | null {
+  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/i);
+  if (!match) return null;
+  return { mimeType: match[1], base64: match[2] };
+}
+
+export function isVisionAiReady(config: AiConfig): boolean {
+  return (
+    config.enabled &&
+    (config.provider === 'gemini' || config.provider === 'openai') &&
+    Boolean(config.apiKey.trim())
+  );
+}
+
+async function callVisionLlm(
+  config: AiConfig,
+  imageDataUrl: string,
+  prompt: string,
+  jsonMode = false
+): Promise<string> {
+  if (config.provider === 'chrome-nano') {
+    throw new Error(
+      'Chrome Built-In AI (Gemini Nano) does not support image vision inputs here. Please switch to Gemini or OpenAI in AI Settings.'
+    );
+  }
+  if (!config.apiKey.trim()) {
+    throw new Error('Please enter an API key in AI Settings first.');
+  }
+
+  if (config.provider === 'gemini') {
+    let parsed = parseDataUrl(imageDataUrl);
+    if (!parsed) {
+      const resp = await fetch(imageDataUrl);
+      const blob = await resp.blob();
+      const base64 = await blobToBase64(blob);
+      parsed = { mimeType: blob.type || 'image/png', base64 };
+    }
+    const model = config.model || 'gemini-2.5-flash';
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+      model
+    )}:generateContent?key=${encodeURIComponent(config.apiKey.trim())}`;
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              { inlineData: { mimeType: parsed.mimeType, data: parsed.base64 } },
+              { text: prompt },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.2,
+          ...(jsonMode ? { responseMimeType: 'application/json' } : {}),
+        },
+      }),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Gemini Vision error (${res.status}): ${errText.slice(0, 180)}`);
+    }
+    const data = await res.json();
+    return data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+  }
+
+  // OpenAI-compatible Vision
+  const baseUrl = (config.baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '');
+  const res = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${config.apiKey.trim()}`,
+    },
+    body: JSON.stringify({
+      model: config.model || 'gpt-4o-mini',
+      temperature: 0.2,
+      ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are an instructional accessibility specialist expert in ADA Title II and WCAG 2.1 AA for education.',
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: imageDataUrl } },
+          ],
+        },
+      ],
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`OpenAI Vision error (${res.status}): ${errText.slice(0, 180)}`);
+  }
+  const data = await res.json();
+  return data?.choices?.[0]?.message?.content?.trim() || '';
+}
+
+export async function extractPdfPageHtmlWithVisionAi(
+  config: AiConfig,
+  pageDataUrl: string,
+  pageNum: number,
+  totalPages: number,
+  courseContext?: CourseContext
+): Promise<string> {
+  const prompt = [
+    `Convert page ${pageNum} of ${totalPages} of this educational PDF into clean, semantic WCAG 2.1 AA HTML.`,
+    `Course context: ${formatCourseContextLine(courseContext)}`,
+    'Rules:',
+    '- Read multi-column layouts in correct human reading order.',
+    '- Use semantic <h2>, <h3>, <p>, <ul>, <ol>, <blockquote>, and <table> with <thead> and <th scope="col"> / <th scope="row">.',
+    '- Return ONLY the inner HTML fragment for this page (no <html>, <head>, <body>, or markdown code fences).',
+  ].join('\n');
+
+  const raw = await callVisionLlm(config, pageDataUrl, prompt, false);
+  return raw.replace(/^```html?\s*/i, '').replace(/```$/i, '').trim();
+}
+
+export async function generateOfficeImageAltWithAi(
+  config: AiConfig,
+  imageDataUrl: string,
+  fileName: string,
+  slideOrPage: number,
+  courseContext?: CourseContext
+): Promise<string> {
+  const prompt = [
+    'Write concise, pedagogically accurate WCAG 2.1 AA alt text for this embedded image from a course document.',
+    `- Course context: ${formatCourseContextLine(courseContext)}`,
+    `- File: ${fileName} (Slide/Page ${slideOrPage})`,
+    '- Return ONLY the alt text string (no quotes, max 125 characters).',
+  ].join('\n');
+
+  const raw = await callVisionLlm(config, imageDataUrl, prompt, false);
+  return raw.replace(/^["']|["']$/g, '').trim().slice(0, 140);
+}
+
+export async function describeAsciiDiagramWithAi(
+  config: AiConfig,
+  asciiArt: string,
+  courseContext?: CourseContext
+): Promise<string> {
+  const prompt = [
+    'Describe this ASCII art diagram concisely in 1-2 sentences for a blind student using a screen reader.',
+    `- Course context: ${formatCourseContextLine(courseContext)}`,
+    '- Explain the structure, flow, or relationships shown rather than reading punctuation.',
+    '- Return ONLY the plain-text description (no quotes).',
+    '',
+    asciiArt.slice(0, 2000),
+  ].join('\n');
+
+  return callLlm(config, prompt);
+}
+
+export async function extractCodeFromScreenshotWithAi(
+  config: AiConfig,
+  imageDataUrl: string,
+  courseContext?: CourseContext
+): Promise<{ code: string; language: string; caption: string }> {
+  const prompt = [
+    'Transcribe the code or terminal output shown in this educational screenshot.',
+    `- Course context: ${formatCourseContextLine(courseContext)}`,
+    'Return ONLY valid JSON (no markdown fences) with keys:',
+    '- "code": exact transcribed code/terminal text with proper indentation and newlines',
+    '- "language": programming language or shell (e.g. "python", "javascript", "bash", "sql", "text")',
+    '- "caption": brief 1-sentence accessible caption describing what the code/output demonstrates',
+  ].join('\n');
+
+  const raw = await callVisionLlm(config, imageDataUrl, prompt, true);
+  const cleaned = raw.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
+  const parsed = JSON.parse(cleaned) as { code?: string; language?: string; caption?: string };
+  return {
+    code: parsed.code || '',
+    language: parsed.language || 'text',
+    caption: parsed.caption || 'Code listing',
+  };
+}
+
+export async function extractLatexFromEquationWithAi(
+  config: AiConfig,
+  imageDataUrl: string,
+  courseContext?: CourseContext
+): Promise<{ latex: string; plainEnglish: string }> {
+  const prompt = [
+    'Transcribe the mathematical/scientific equation in this image into LaTeX and a plain-English spoken description.',
+    `- Course context: ${formatCourseContextLine(courseContext)}`,
+    'Return ONLY valid JSON (no markdown fences) with keys:',
+    '- "latex": clean LaTeX math expression WITHOUT surrounding $$ or \\( \\) delimiters',
+    '- "plainEnglish": clear spoken-English description for screen readers',
+  ].join('\n');
+
+  const raw = await callVisionLlm(config, imageDataUrl, prompt, true);
+  const cleaned = raw.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
+  const parsed = JSON.parse(cleaned) as { latex?: string; plainEnglish?: string };
+  return {
+    latex: (parsed.latex || '').replace(/^\$\$|\$\$$/g, '').trim(),
+    plainEnglish: parsed.plainEnglish || '',
+  };
+}
+
+export async function extractDataTableFromChartWithAi(
+  config: AiConfig,
+  imageDataUrl: string,
+  courseContext?: CourseContext
+): Promise<{ title: string; headers: string[]; rows: string[][] }> {
+  const prompt = [
+    'Extract the data from this chart, graph, spectrum, or plot into a structured accessible data table.',
+    `- Course context: ${formatCourseContextLine(courseContext)}`,
+    'Return ONLY valid JSON (no markdown fences) with keys:',
+    '- "title": concise chart title',
+    '- "headers": array of column header strings (at least 2 columns)',
+    '- "rows": array of string arrays matching the headers length',
+  ].join('\n');
+
+  const raw = await callVisionLlm(config, imageDataUrl, prompt, true);
+  const cleaned = raw.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
+  const parsed = JSON.parse(cleaned) as {
+    title?: string;
+    headers?: string[];
+    rows?: string[][];
+  };
+  return {
+    title: parsed.title || 'Chart Data Table',
+    headers: Array.isArray(parsed.headers) && parsed.headers.length > 0 ? parsed.headers : ['Category', 'Value'],
+    rows: Array.isArray(parsed.rows) ? parsed.rows : [],
+  };
+}

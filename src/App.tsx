@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import JSZip from 'jszip';
 import {
   AlertCircle,
   AlertTriangle,
@@ -26,20 +27,38 @@ import {
 import {
   DEFAULT_REMEDIATION_OPTIONS,
   type AiConfig,
+  type AttachmentAudit,
   type CoursePackage,
   type CoursePage,
   type RemediationOptions,
 } from './types';
-import { auditHtml } from './engine/auditor';
+import { auditHtml, isFullHtmlDocument, parseHtmlDocument } from './engine/auditor';
 import {
+  appendCompanionDataTableToImage,
   generateLmsSafeHtml,
   remediateHtml,
+  replaceImageWithCodeBlock,
+  replaceImageWithMathMl,
   updateImageAltInHtml,
   updateLinkTextInHtml,
 } from './engine/remediator';
-import { exportRemediatedPackage } from './engine/imscc';
+import { createCoursePage, exportRemediatedPackage } from './engine/imscc';
 import { generateComplianceReportMarkdown } from './engine/report';
-import { generatePlainLanguageSummaryWithAi } from './engine/aiEnhancer';
+import {
+  generateOfficeImageAltWithAi,
+  generatePlainLanguageSummaryWithAi,
+  isVisionAiReady,
+} from './engine/aiEnhancer';
+import {
+  convertPdfToAccessibleHtml,
+  type PdfConversionProgress,
+} from './engine/pdfRemediator';
+import {
+  applyOfficeImageFixes,
+  extractOfficeHtmlOutline,
+  inspectOfficeImages,
+  type OfficeImageItem,
+} from './engine/officeRemediator';
 import { attachCaptionsAndTranscriptToHtml } from './engine/captions';
 import {
   clearWorkspaceFromDb,
@@ -106,6 +125,14 @@ export default function App() {
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [pdfProgress, setPdfProgress] = useState<Record<string, PdfConversionProgress | null>>({});
+  const [expandedOfficeId, setExpandedOfficeId] = useState<string | null>(null);
+  const [officeImages, setOfficeImages] = useState<Record<string, OfficeImageItem[]>>({});
+  const [officeDrafts, setOfficeDrafts] = useState<
+    Record<string, { altText: string; isDecorative: boolean }>
+  >({});
+  const [officeBusyId, setOfficeBusyId] = useState<string | null>(null);
+  const [officeAiLoadingKey, setOfficeAiLoadingKey] = useState<string | null>(null);
 
   // Restore crash-proof IndexedDB workspace on startup
   useEffect(() => {
@@ -264,6 +291,305 @@ export default function App() {
       ),
     });
     setStatusMessage('Updated link text and re-audited page.');
+  }
+
+  function updateActivePageHtml(nextHtml: string, message: string) {
+    if (!course || !activePage) return;
+    const nextAudit = auditHtml(nextHtml);
+    setCourse({
+      ...course,
+      pages: course.pages.map((p) =>
+        p.id === activePage.id
+          ? { ...p, remediatedHtml: nextHtml, remediatedAudit: nextAudit, isRemediated: true }
+          : p
+      ),
+    });
+    setStatusMessage(message);
+  }
+
+  function handleConvertImageToCodeBlock(
+    imgIndex: number,
+    code: string,
+    language: string,
+    caption: string
+  ) {
+    if (!activePage) return;
+    const nextHtml = replaceImageWithCodeBlock(
+      activePage.remediatedHtml,
+      imgIndex,
+      code,
+      language,
+      caption
+    );
+    updateActivePageHtml(nextHtml, 'Converted code screenshot to semantic <pre><code> block.');
+  }
+
+  function handleConvertImageToMathMl(
+    imgIndex: number,
+    latex: string,
+    plainEnglish: string
+  ) {
+    if (!activePage) return;
+    const nextHtml = replaceImageWithMathMl(
+      activePage.remediatedHtml,
+      imgIndex,
+      latex,
+      plainEnglish
+    );
+    updateActivePageHtml(nextHtml, 'Converted equation image to semantic MathML.');
+  }
+
+  function handleAppendCompanionDataTable(
+    imgIndex: number,
+    table: { title: string; headers: string[]; rows: string[][] }
+  ) {
+    if (!activePage) return;
+    const nextHtml = appendCompanionDataTableToImage(
+      activePage.remediatedHtml,
+      imgIndex,
+      table
+    );
+    updateActivePageHtml(nextHtml, 'Injected collapsible WCAG 1.1.1 companion data table.');
+  }
+
+  function handleUpdateAsciiDiagramLabel(preIndex: number, description: string) {
+    if (!activePage || !description.trim()) return;
+    const isFullDoc = isFullHtmlDocument(activePage.remediatedHtml);
+    const doc = parseHtmlDocument(activePage.remediatedHtml, isFullDoc);
+    const pre = Array.from(doc.querySelectorAll('pre'))[preIndex];
+    if (!pre) return;
+    const figure = doc.createElement('figure');
+    figure.setAttribute('role', 'img');
+    figure.setAttribute('aria-label', description.trim());
+    const clonedPre = pre.cloneNode(true) as HTMLElement;
+    clonedPre.setAttribute('aria-hidden', 'true');
+    const figcaption = doc.createElement('figcaption');
+    figcaption.textContent = description.trim();
+    figure.appendChild(clonedPre);
+    figure.appendChild(figcaption);
+    pre.replaceWith(figure);
+    const nextHtml = isFullDoc
+      ? `<!doctype html>\n${doc.documentElement.outerHTML}`
+      : doc.body.innerHTML;
+    updateActivePageHtml(nextHtml, 'Labeled ASCII diagram with accessible <figure role="img">.');
+  }
+
+  async function getAttachmentBuffer(attPath: string): Promise<ArrayBuffer> {
+    if (course?.extraBinaryFiles?.[attPath]) {
+      const bytes = course.extraBinaryFiles[attPath];
+      return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+    }
+    if (!course?.zipArrayBuffer) {
+      throw new Error('Original archive buffer is not available for this attachment.');
+    }
+    const zip = await JSZip.loadAsync(course.zipArrayBuffer);
+    const entry = zip.file(attPath);
+    if (!entry) {
+      throw new Error(`Could not find ${attPath} inside the course archive.`);
+    }
+    return entry.async('arraybuffer');
+  }
+
+  async function handleConvertPdfAttachment(att: AttachmentAudit) {
+    if (!course) return;
+    try {
+      const buffer = await getAttachmentBuffer(att.path);
+      const res = await convertPdfToAccessibleHtml(buffer, att.fileName, {
+        aiConfig,
+        courseContext: course.courseContext,
+        language: options.language,
+        onProgress: (prog) =>
+          setPdfProgress((prev) => ({ ...prev, [att.id]: prog })),
+      });
+
+      const companionPath = att.path.replace(/\.pdf$/i, '-accessible.html');
+      const newPage = createCoursePage(companionPath, res.html, `${res.title} (Accessible HTML)`);
+      const nextPages = course.pages.some((p) => p.path === companionPath)
+        ? course.pages.map((p) => (p.path === companionPath ? newPage : p))
+        : [...course.pages, newPage];
+
+      setCourse({
+        ...course,
+        pages: nextPages,
+        attachments: (course.attachments || []).map((a) =>
+          a.id === att.id
+            ? {
+                ...a,
+                status: 'ok',
+                remediated: true,
+                remediatedNote: 'Remediated via Companion HTML Page',
+                companionPagePath: companionPath,
+                summary: `Remediated via Companion HTML Page (${res.pageCount} page${res.pageCount === 1 ? '' : 's'}, ${res.method === 'vision-ai' ? 'Vision AI' : 'Offline OCR'})`,
+                details: [
+                  `Generated accessible HTML page: ${companionPath}`,
+                  ...a.details,
+                ],
+              }
+            : a
+        ),
+      });
+      setStatusMessage(`Converted ${att.fileName} to accessible HTML page (${companionPath}).`);
+    } catch (err) {
+      setStatusMessage(
+        err instanceof Error ? `PDF conversion failed: ${err.message}` : 'PDF conversion failed.'
+      );
+    } finally {
+      setPdfProgress((prev) => ({ ...prev, [att.id]: null }));
+    }
+  }
+
+  async function handleToggleOfficeInspector(att: AttachmentAudit) {
+    if (expandedOfficeId === att.id) {
+      setExpandedOfficeId(null);
+      return;
+    }
+    setExpandedOfficeId(att.id);
+    if (officeImages[att.id]) return;
+
+    try {
+      setOfficeBusyId(att.id);
+      const buf = await getAttachmentBuffer(att.path);
+      const kind = att.kind === 'pptx' ? 'pptx' : 'docx';
+      const imgs = await inspectOfficeImages(buf, kind);
+      setOfficeImages((prev) => ({ ...prev, [att.id]: imgs }));
+      const nextDrafts: Record<string, { altText: string; isDecorative: boolean }> = {};
+      for (const img of imgs) {
+        nextDrafts[img.id] = { altText: img.currentAlt, isDecorative: img.isDecorative };
+      }
+      setOfficeDrafts((prev) => ({ ...prev, ...nextDrafts }));
+    } catch (err) {
+      setStatusMessage(
+        err instanceof Error ? `Could not inspect ${att.fileName}: ${err.message}` : 'Inspection failed.'
+      );
+    } finally {
+      setOfficeBusyId(null);
+    }
+  }
+
+  async function handleAiOfficeImageAlt(att: AttachmentAudit, img: OfficeImageItem) {
+    if (!img.dataUrl) return;
+    const key = `${att.id}:${img.id}`;
+    setOfficeAiLoadingKey(key);
+    try {
+      const alt = await generateOfficeImageAltWithAi(
+        aiConfig,
+        img.dataUrl,
+        att.fileName,
+        img.slideOrPage,
+        course?.courseContext
+      );
+      setOfficeDrafts((prev) => ({
+        ...prev,
+        [img.id]: { altText: alt, isDecorative: false },
+      }));
+    } catch (err) {
+      setStatusMessage(err instanceof Error ? err.message : 'AI alt-text generation failed.');
+    } finally {
+      setOfficeAiLoadingKey(null);
+    }
+  }
+
+  async function handleApplyOfficeFixes(att: AttachmentAudit) {
+    if (!course) return;
+    const imgs = officeImages[att.id] || [];
+    if (imgs.length === 0) return;
+
+    try {
+      setOfficeBusyId(att.id);
+      const buf = await getAttachmentBuffer(att.path);
+      const kind = att.kind === 'pptx' ? 'pptx' : 'docx';
+      const fixes = imgs.map((img) => {
+        const d = officeDrafts[img.id] || {
+          altText: img.currentAlt,
+          isDecorative: img.isDecorative,
+        };
+        return {
+          partPath: img.partPath,
+          elementId: img.elementId,
+          altText: d.altText,
+          isDecorative: d.isDecorative,
+        };
+      });
+
+      const patchedBytes = await applyOfficeImageFixes(buf, kind, fixes);
+      const updatedImgs = await inspectOfficeImages(
+        patchedBytes.buffer.slice(
+          patchedBytes.byteOffset,
+          patchedBytes.byteOffset + patchedBytes.byteLength
+        ) as ArrayBuffer,
+        kind
+      );
+      setOfficeImages((prev) => ({ ...prev, [att.id]: updatedImgs }));
+
+      const remainingMissing = updatedImgs.filter((i) => i.missingAlt).length;
+      setCourse({
+        ...course,
+        extraBinaryFiles: {
+          ...(course.extraBinaryFiles || {}),
+          [att.path]: patchedBytes,
+        },
+        attachments: (course.attachments || []).map((a) =>
+          a.id === att.id
+            ? {
+                ...a,
+                status: remainingMissing === 0 ? 'ok' : 'critical',
+                remediated: remainingMissing === 0,
+                remediatedNote:
+                  remainingMissing === 0
+                    ? 'Patched in-place in .imscc export'
+                    : `${remainingMissing} image(s) still missing alt text`,
+                summary:
+                  remainingMissing === 0
+                    ? `${kind.toUpperCase()} — All ${updatedImgs.length} image(s) labeled in-place`
+                    : `${kind.toUpperCase()} — ${remainingMissing} image(s) still missing alt text`,
+              }
+            : a
+        ),
+      });
+      setStatusMessage(`Patched ${att.fileName} in-place for export.`);
+    } catch (err) {
+      setStatusMessage(err instanceof Error ? `Failed to patch ${att.fileName}: ${err.message}` : 'Patch failed.');
+    } finally {
+      setOfficeBusyId(null);
+    }
+  }
+
+  async function handleExtractOfficeOutline(att: AttachmentAudit) {
+    if (!course) return;
+    try {
+      setOfficeBusyId(att.id);
+      const buf = await getAttachmentBuffer(att.path);
+      const kind = att.kind === 'pptx' ? 'pptx' : 'docx';
+      const { html, title } = await extractOfficeHtmlOutline(buf, kind, att.fileName);
+      const companionPath = att.path.replace(/\.(pptx|docx)$/i, '-outline.html');
+      const newPage = createCoursePage(companionPath, html, title);
+      const nextPages = course.pages.some((p) => p.path === companionPath)
+        ? course.pages.map((p) => (p.path === companionPath ? newPage : p))
+        : [...course.pages, newPage];
+
+      setCourse({
+        ...course,
+        pages: nextPages,
+        attachments: (course.attachments || []).map((a) =>
+          a.id === att.id
+            ? {
+                ...a,
+                companionPagePath: companionPath,
+                remediatedNote: a.remediatedNote
+                  ? `${a.remediatedNote}; HTML outline extracted`
+                  : 'Accessible HTML outline extracted',
+              }
+            : a
+        ),
+      });
+      setStatusMessage(`Extracted accessible HTML outline for ${att.fileName} (${companionPath}).`);
+    } catch (err) {
+      setStatusMessage(
+        err instanceof Error ? `Outline extraction failed: ${err.message}` : 'Outline extraction failed.'
+      );
+    } finally {
+      setOfficeBusyId(null);
+    }
   }
 
   function handleAttachMediaAccessibility(
@@ -959,6 +1285,10 @@ export default function App() {
                     courseContext={course.courseContext}
                     onUpdateImageAlt={handleInlineImageAlt}
                     onUpdateLinkText={handleInlineLinkText}
+                    onConvertImageToCodeBlock={handleConvertImageToCodeBlock}
+                    onConvertImageToMathMl={handleConvertImageToMathMl}
+                    onAppendCompanionDataTable={handleAppendCompanionDataTable}
+                    onUpdateAsciiDiagramLabel={handleUpdateAsciiDiagramLabel}
                   />
                 )}
 
@@ -978,53 +1308,251 @@ export default function App() {
                       downloadable <strong>ADA Compliance Report</strong> as a Manual Action Checklist.
                     </p>
                     <div className="issue-list">
-                      {(course.attachments || []).map((att) => (
-                        <article key={att.id} className="issue-card">
-                          <div className="issue-card-head">
-                            <div>
-                              <h3 className="issue-title">{att.fileName}</h3>
-                              <p className="page-item-path" style={{ margin: '2px 0 0' }}>
-                                {att.path} • {(att.sizeBytes / 1024).toFixed(1)} KB
-                              </p>
+                      {(course.attachments || []).map((att) => {
+                        const pdfProg = pdfProgress[att.id];
+                        const isOffice = att.kind === 'pptx' || att.kind === 'docx';
+                        const isExpanded = expandedOfficeId === att.id;
+                        const imgs = officeImages[att.id] || [];
+                        const isOfficeBusy = officeBusyId === att.id;
+
+                        return (
+                          <article key={att.id} className="issue-card">
+                            <div className="issue-card-head">
+                              <div>
+                                <h3 className="issue-title">{att.fileName}</h3>
+                                <p className="page-item-path" style={{ margin: '2px 0 0' }}>
+                                  {att.path} • {(att.sizeBytes / 1024).toFixed(1)} KB
+                                </p>
+                              </div>
+                              <div className="issue-tags">
+                                <span
+                                  className={`badge ${
+                                    att.status === 'critical'
+                                      ? 'badge-critical'
+                                      : att.status === 'review'
+                                        ? 'badge-serious'
+                                        : 'badge-success'
+                                  }`}
+                                >
+                                  {att.status === 'critical' ? (
+                                    <AlertCircle size={12} aria-hidden="true" />
+                                  ) : att.status === 'review' ? (
+                                    <AlertTriangle size={12} aria-hidden="true" />
+                                  ) : (
+                                    <CheckCircle2 size={12} aria-hidden="true" />
+                                  )}
+                                  {att.remediated
+                                    ? 'Remediated'
+                                    : att.status === 'critical'
+                                      ? 'Critical Barrier'
+                                      : att.status === 'review'
+                                        ? 'Manual Review'
+                                        : 'Tagged / OK'}
+                                </span>
+                                <span className="badge badge-neutral">
+                                  WCAG {att.wcagCriterion}
+                                </span>
+                              </div>
                             </div>
-                            <div className="issue-tags">
-                              <span
-                                className={`badge ${
-                                  att.status === 'critical'
-                                    ? 'badge-critical'
-                                    : att.status === 'review'
-                                      ? 'badge-serious'
-                                      : 'badge-success'
-                                }`}
-                              >
-                                {att.status === 'critical' ? (
-                                  <AlertCircle size={12} aria-hidden="true" />
-                                ) : att.status === 'review' ? (
-                                  <AlertTriangle size={12} aria-hidden="true" />
-                                ) : (
-                                  <CheckCircle2 size={12} aria-hidden="true" />
+                            <p className="issue-desc" style={{ fontWeight: 600 }}>
+                              {att.summary}
+                            </p>
+                            <ul className="check-list">
+                              {att.details.map((d, idx) => (
+                                <li key={idx}>{d}</li>
+                              ))}
+                            </ul>
+
+                            {att.kind === 'pdf' && att.status !== 'ok' && !att.remediated && (
+                              <div style={{ marginTop: 10 }}>
+                                <button
+                                  type="button"
+                                  className="btn btn-primary btn-sm"
+                                  disabled={Boolean(pdfProg)}
+                                  onClick={() => void handleConvertPdfAttachment(att)}
+                                >
+                                  <FileText size={14} aria-hidden="true" />
+                                  {pdfProg
+                                    ? pdfProg.stage
+                                    : 'Convert PDF to Accessible HTML Page'}
+                                </button>
+                              </div>
+                            )}
+
+                            {isOffice && (
+                              <div style={{ marginTop: 10 }}>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    disabled={isOfficeBusy}
+                                    onClick={() => void handleToggleOfficeInspector(att)}
+                                  >
+                                    {isExpanded
+                                      ? 'Hide Image Inspector'
+                                      : 'Inspect & Repair Image Alt Text'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    disabled={isOfficeBusy}
+                                    onClick={() => void handleExtractOfficeOutline(att)}
+                                  >
+                                    <FileText size={14} aria-hidden="true" />
+                                    Extract Accessible HTML Outline
+                                  </button>
+                                </div>
+
+                                {isExpanded && (
+                                  <div
+                                    style={{
+                                      marginTop: 12,
+                                      padding: 12,
+                                      borderRadius: 8,
+                                      border: '1px solid var(--border)',
+                                      background: 'var(--bg-subtle, #f8fafc)',
+                                    }}
+                                  >
+                                    {isOfficeBusy && imgs.length === 0 ? (
+                                      <p className="field-hint" style={{ margin: 0 }}>
+                                        Unpacking {att.fileName} images...
+                                      </p>
+                                    ) : imgs.length === 0 ? (
+                                      <p className="field-hint" style={{ margin: 0 }}>
+                                        No embedded images found in {att.fileName}.
+                                      </p>
+                                    ) : (
+                                      <div>
+                                        <div
+                                          style={{
+                                            display: 'flex',
+                                            justifyContent: 'space-between',
+                                            alignItems: 'center',
+                                            marginBottom: 10,
+                                          }}
+                                        >
+                                          <strong style={{ fontSize: '0.84rem' }}>
+                                            {imgs.length} Embedded Image{imgs.length === 1 ? '' : 's'}
+                                          </strong>
+                                          <button
+                                            type="button"
+                                            className="btn btn-primary btn-sm"
+                                            disabled={isOfficeBusy}
+                                            onClick={() => void handleApplyOfficeFixes(att)}
+                                          >
+                                            Apply Fixes to {att.kind === 'pptx' ? '.pptx' : '.docx'}
+                                          </button>
+                                        </div>
+
+                                        <div style={{ display: 'grid', gap: 10 }}>
+                                          {imgs.map((img) => {
+                                            const draft = officeDrafts[img.id] || {
+                                              altText: img.currentAlt,
+                                              isDecorative: img.isDecorative,
+                                            };
+                                            const aiKey = `${att.id}:${img.id}`;
+                                            return (
+                                              <div
+                                                key={img.id}
+                                                style={{
+                                                  display: 'flex',
+                                                  gap: 12,
+                                                  alignItems: 'flex-start',
+                                                  padding: 10,
+                                                  background: '#ffffff',
+                                                  border: '1px solid var(--border)',
+                                                  borderRadius: 6,
+                                                }}
+                                              >
+                                                {img.dataUrl ? (
+                                                  <img
+                                                    src={img.dataUrl}
+                                                    alt={draft.altText || img.elementName}
+                                                    style={{
+                                                      width: 72,
+                                                      height: 72,
+                                                      objectFit: 'contain',
+                                                      border: '1px solid #e2e8f0',
+                                                      borderRadius: 4,
+                                                      flexShrink: 0,
+                                                    }}
+                                                  />
+                                                ) : (
+                                                  <div
+                                                    style={{
+                                                      width: 72,
+                                                      height: 72,
+                                                      background: '#e2e8f0',
+                                                      borderRadius: 4,
+                                                      flexShrink: 0,
+                                                    }}
+                                                  />
+                                                )}
+                                                <div style={{ flex: 1, minWidth: 0 }}>
+                                                  <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: 4 }}>
+                                                    {att.kind === 'pptx' ? `Slide ${img.slideOrPage}` : 'Document'} • Element ID: <code>{img.elementId}</code> ({img.elementName})
+                                                  </div>
+                                                  <div className="inline-editor-row" style={{ marginBottom: 6 }}>
+                                                    <input
+                                                      type="text"
+                                                      className="text-input"
+                                                      disabled={draft.isDecorative}
+                                                      value={draft.altText}
+                                                      placeholder="Enter alt text description..."
+                                                      onChange={(e) =>
+                                                        setOfficeDrafts((prev) => ({
+                                                          ...prev,
+                                                          [img.id]: {
+                                                            ...draft,
+                                                            altText: e.target.value,
+                                                          },
+                                                        }))
+                                                      }
+                                                    />
+                                                    {isVisionAiReady(aiConfig) && img.dataUrl && (
+                                                      <button
+                                                        type="button"
+                                                        className="btn btn-secondary btn-sm"
+                                                        disabled={officeAiLoadingKey === aiKey}
+                                                        onClick={() => void handleAiOfficeImageAlt(att, img)}
+                                                      >
+                                                        <Sparkles size={13} aria-hidden="true" />
+                                                        {officeAiLoadingKey === aiKey
+                                                          ? 'Generating...'
+                                                          : 'AI Generate Alt Text'}
+                                                      </button>
+                                                    )}
+                                                  </div>
+                                                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.8rem' }}>
+                                                    <input
+                                                      type="checkbox"
+                                                      checked={draft.isDecorative}
+                                                      onChange={(e) =>
+                                                        setOfficeDrafts((prev) => ({
+                                                          ...prev,
+                                                          [img.id]: {
+                                                            ...draft,
+                                                            isDecorative: e.target.checked,
+                                                          },
+                                                        }))
+                                                      }
+                                                    />
+                                                    Mark Decorative (&lt;adec:decorative val=&quot;1&quot;/&gt;)
+                                                  </label>
+                                                </div>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
                                 )}
-                                {att.status === 'critical'
-                                  ? 'Critical Barrier'
-                                  : att.status === 'review'
-                                    ? 'Manual Review'
-                                    : 'Tagged / OK'}
-                              </span>
-                              <span className="badge badge-neutral">
-                                WCAG {att.wcagCriterion}
-                              </span>
-                            </div>
-                          </div>
-                          <p className="issue-desc" style={{ fontWeight: 600 }}>
-                            {att.summary}
-                          </p>
-                          <ul className="check-list">
-                            {att.details.map((d, idx) => (
-                              <li key={idx}>{d}</li>
-                            ))}
-                          </ul>
-                        </article>
-                      ))}
+                              </div>
+                            )}
+                          </article>
+                        );
+                      })}
                     </div>
                   </div>
                 )}

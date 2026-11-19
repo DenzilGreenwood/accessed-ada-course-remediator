@@ -1,6 +1,7 @@
 import type { RemediationChange, RemediationOptions, RuleId } from '../types';
 import {
   getEffectiveBackground,
+  isAsciiArtDiagram,
   isFakeHeadingParagraph,
   isFullHtmlDocument,
   parseHtmlDocument,
@@ -11,6 +12,11 @@ import {
   parseColor,
   parseFontSizePx,
 } from './contrast';
+import {
+  latexToAccessibleLabel,
+  renderLatexToMathMl,
+  upgradeRawLatexInDocument,
+} from './mathRemediator';
 
 const ACCESSIBLE_STYLE_ID = 'accessed-ada-styles';
 
@@ -74,6 +80,41 @@ table caption {
   margin-top: 8px;
   line-height: 1.6;
   color: #1e293b;
+}
+.accessed-data-table {
+  margin: 10px 0 18px;
+  padding: 10px 14px;
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+}
+.accessed-data-table summary {
+  font-weight: 600;
+  cursor: pointer;
+  color: #0f172a;
+}
+.accessed-data-table table {
+  border-collapse: collapse;
+  width: 100%;
+  margin-top: 10px;
+}
+.accessed-data-table th,
+.accessed-data-table td {
+  border: 1px solid #cbd5e1;
+  padding: 6px 10px;
+  text-align: left;
+}
+.accessed-data-table th {
+  background: #e2e8f0;
+}
+.accessed-math {
+  display: inline-block;
+  margin: 0 2px;
+}
+div.accessed-math {
+  display: block;
+  margin: 12px 0;
+  text-align: center;
 }
 `.trim();
 
@@ -689,6 +730,58 @@ export function remediateHtml(
     });
   }
 
+  // 8b. ASCII art / diagram <pre> blocks -> semantic <figure role="img" aria-label="...">
+  if (options.fixImages) {
+    const preBlocks = Array.from(doc.querySelectorAll('pre'));
+    preBlocks.forEach((pre) => {
+      const text = pre.textContent || '';
+      if (!isAsciiArtDiagram(text)) return;
+      const parentFigure = pre.closest('figure');
+      const alreadyLabeled =
+        (pre.getAttribute('role') === 'img' && Boolean(pre.getAttribute('aria-label')?.trim())) ||
+        (pre.getAttribute('aria-hidden') === 'true' &&
+          parentFigure?.getAttribute('role') === 'img' &&
+          Boolean(parentFigure.getAttribute('aria-label')?.trim()));
+      if (alreadyLabeled) return;
+
+      const tokens = text
+        .replace(/[┌┐└┘├┤┬┴┼─│═║╔╗╚╝╠╣╦╩╬+\-|/\\<>^v*]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      const summary = tokens
+        ? `ASCII diagram: ${tokens.slice(0, 140)}`
+        : 'ASCII diagram illustration (visual layout hidden from screen reader)';
+
+      const figure = doc.createElement('figure');
+      figure.setAttribute('role', 'img');
+      figure.setAttribute('aria-label', summary);
+      const clonedPre = pre.cloneNode(true) as HTMLElement;
+      clonedPre.setAttribute('aria-hidden', 'true');
+      const figcaption = doc.createElement('figcaption');
+      figcaption.textContent = summary;
+      figure.appendChild(clonedPre);
+      figure.appendChild(figcaption);
+      pre.replaceWith(figure);
+      record(
+        'ascii-diagram',
+        '1.1.1 Non-text Content',
+        'Wrapped ASCII art diagram in accessible <figure role="img"> with aria-label and hidden raw punctuation'
+      );
+    });
+  }
+
+  // 8c. Raw LaTeX expressions -> semantic MathML
+  if (options.fixDocumentStructure) {
+    const mathCount = upgradeRawLatexInDocument(doc);
+    for (let i = 0; i < mathCount; i++) {
+      record(
+        'raw-latex',
+        '1.3.1 Info and Relationships',
+        'Converted raw LaTeX expressions into navigable semantic MathML'
+      );
+    }
+  }
+
   // 9. Inject clean accessible base CSS (skip-link, sr-only, focus-visible)
   if (options.injectAccessibleStyles) {
     if (isFullDoc) {
@@ -773,4 +866,132 @@ export function generateLmsSafeHtml(html: string): string {
   });
 
   return clone.innerHTML.trim();
+}
+
+/** Replaces an <img> at imgIndex with a semantic <figure><pre><code>...</code></pre><figcaption>...</figcaption></figure> */
+export function replaceImageWithCodeBlock(
+  html: string,
+  imgIndex: number,
+  code: string,
+  language = 'text',
+  caption = ''
+): string {
+  const isFullDoc = isFullHtmlDocument(html);
+  const doc = parseHtmlDocument(html, isFullDoc);
+  const images = Array.from(doc.querySelectorAll('img'));
+  const target = images[imgIndex];
+  if (!target) return html;
+
+  const figure = doc.createElement('figure');
+  figure.className = 'accessed-code-figure';
+  const pre = doc.createElement('pre');
+  const codeEl = doc.createElement('code');
+  if (language.trim()) {
+    codeEl.className = `language-${language.trim().toLowerCase()}`;
+  }
+  codeEl.textContent = code;
+  pre.appendChild(codeEl);
+  figure.appendChild(pre);
+
+  if (caption.trim()) {
+    const figcaption = doc.createElement('figcaption');
+    figcaption.textContent = caption.trim();
+    figure.appendChild(figcaption);
+  }
+
+  target.replaceWith(figure);
+  return isFullDoc ? `<!doctype html>\n${doc.documentElement.outerHTML}` : doc.body.innerHTML;
+}
+
+/** Replaces an equation <img> at imgIndex with semantic MathML + accessible aria-label */
+export function replaceImageWithMathMl(
+  html: string,
+  imgIndex: number,
+  latex: string,
+  plainEnglish?: string
+): string {
+  const isFullDoc = isFullHtmlDocument(html);
+  const doc = parseHtmlDocument(html, isFullDoc);
+  const images = Array.from(doc.querySelectorAll('img'));
+  const target = images[imgIndex];
+  if (!target) return html;
+
+  const span = doc.createElement('span');
+  span.className = 'accessed-math';
+  span.setAttribute('role', 'math');
+  span.setAttribute(
+    'aria-label',
+    plainEnglish?.trim() || latexToAccessibleLabel(latex)
+  );
+  span.innerHTML = renderLatexToMathMl(latex, false);
+
+  target.replaceWith(span);
+  return isFullDoc ? `<!doctype html>\n${doc.documentElement.outerHTML}` : doc.body.innerHTML;
+}
+
+/** Injects a collapsible WCAG 1.1.1 companion data table directly beneath an <img> */
+export function appendCompanionDataTableToImage(
+  html: string,
+  imgIndex: number,
+  tableData: { title: string; headers: string[]; rows: string[][] }
+): string {
+  const isFullDoc = isFullHtmlDocument(html);
+  const doc = parseHtmlDocument(html, isFullDoc);
+  const images = Array.from(doc.querySelectorAll('img'));
+  const target = images[imgIndex];
+  if (!target) return html;
+
+  const title = tableData.title.trim() || 'Chart Data Table';
+  if (!target.getAttribute('alt')?.trim()) {
+    target.setAttribute('alt', `${title} (see accessible data table below)`);
+  }
+
+  const details = doc.createElement('details');
+  details.className = 'accessed-data-table';
+  const summary = doc.createElement('summary');
+  summary.textContent = `Accessible Data Table: ${title}`;
+  details.appendChild(summary);
+
+  const table = doc.createElement('table');
+  const caption = doc.createElement('caption');
+  caption.textContent = title;
+  table.appendChild(caption);
+
+  const thead = doc.createElement('thead');
+  const headTr = doc.createElement('tr');
+  for (const h of tableData.headers) {
+    const th = doc.createElement('th');
+    th.setAttribute('scope', 'col');
+    th.textContent = h;
+    headTr.appendChild(th);
+  }
+  thead.appendChild(headTr);
+  table.appendChild(thead);
+
+  const tbody = doc.createElement('tbody');
+  for (const row of tableData.rows) {
+    const tr = doc.createElement('tr');
+    row.forEach((cell, cIdx) => {
+      if (cIdx === 0) {
+        const th = doc.createElement('th');
+        th.setAttribute('scope', 'row');
+        th.textContent = cell;
+        tr.appendChild(th);
+      } else {
+        const td = doc.createElement('td');
+        td.textContent = cell;
+        tr.appendChild(td);
+      }
+    });
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  details.appendChild(table);
+
+  // Remove any previously injected companion table immediately following target
+  if (target.nextElementSibling?.classList.contains('accessed-data-table')) {
+    target.nextElementSibling.remove();
+  }
+  target.insertAdjacentElement('afterend', details);
+  return isFullDoc ? `<!doctype html>\n${doc.documentElement.outerHTML}` : doc.body.innerHTML;
 }

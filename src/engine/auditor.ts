@@ -5,6 +5,7 @@ import {
   parseFontSizePx,
   type RGB,
 } from './contrast';
+import { collectRawLatexTextNodes } from './mathRemediator';
 
 const GENERIC_LINK_PHRASES = new Set([
   'click here',
@@ -38,6 +39,15 @@ const GENERIC_TITLES = new Set([
   'index',
   'home',
 ]);
+
+export function isAsciiArtDiagram(text: string): boolean {
+  if (!text || text.trim().length < 8) return false;
+  // Box-drawing characters, ASCII boxes/arrows, or diagonal tree branches
+  const hasBoxDrawing = /[┌┐└┘├┤┬┴┼─│═║╔╗╚╝╠╣╦╩╬]/.test(text);
+  const hasAsciiDiagramTokens =
+    /(\+--|--\+|\+-\+|-->|<--|==>|\/\\|\\\/|\\__|__\/|\|\s+\|)/.test(text);
+  return hasBoxDrawing || hasAsciiDiagramTokens;
+}
 
 export function isFullHtmlDocument(html: string): boolean {
   return /<!doctype\s+html/i.test(html) || /<html[\s>]/i.test(html);
@@ -765,6 +775,63 @@ export function auditHtml(html: string): AuditResult {
       autoFixable: true,
     });
   });
+
+  // 13. ASCII Art & Diagram <pre> blocks lacking accessible label
+  const preBlocks = Array.from(doc.querySelectorAll('pre'));
+  preBlocks.forEach((pre, index) => {
+    const text = pre.textContent || '';
+    if (!isAsciiArtDiagram(text)) return;
+    const parentFigure = pre.closest('figure');
+    const alreadyLabeled =
+      (pre.getAttribute('role') === 'img' && Boolean(pre.getAttribute('aria-label')?.trim())) ||
+      (pre.getAttribute('aria-hidden') === 'true' &&
+        parentFigure?.getAttribute('role') === 'img' &&
+        Boolean(parentFigure.getAttribute('aria-label')?.trim()));
+    if (!alreadyLabeled) {
+      push({
+        ruleId: 'ascii-diagram',
+        wcagCriterion: '1.1.1 Non-text Content',
+        wcagLevel: 'A',
+        principle: 'Perceivable',
+        disabilities: ['blind'],
+        severity: 'serious',
+        title: 'ASCII art / diagram <pre> block missing accessible label',
+        description:
+          'Screen readers announce raw box-drawing characters and punctuation literally unless wrapped in a labeled figure with aria-hidden on the ASCII art.',
+        studentImpact:
+          'Blind students hear dozens of "box drawings light horizontal, vertical bar" symbols instead of the diagram meaning.',
+        snippet: getSnippet(pre),
+        autoFixable: true,
+        elementRef: {
+          tag: 'pre',
+          index,
+          currentValue: text.slice(0, 120),
+          context: getSurroundingContext(pre),
+        },
+      });
+    }
+  });
+
+  // 14. Raw LaTeX expressions not yet converted to semantic MathML
+  const rawLatexNodes = collectRawLatexTextNodes(doc);
+  if (rawLatexNodes.length > 0) {
+    const firstSnippet = rawLatexNodes[0].textContent?.trim().slice(0, 140) || '';
+    push({
+      ruleId: 'raw-latex',
+      wcagCriterion: '1.3.1 Info and Relationships',
+      wcagLevel: 'A',
+      principle: 'Perceivable',
+      disabilities: ['blind', 'low-vision'],
+      severity: 'serious',
+      title: `Raw LaTeX equation${rawLatexNodes.length > 1 ? `s (${rawLatexNodes.length})` : ''} should be rendered as MathML`,
+      description:
+        'Raw LaTeX delimiters ($$...$$, \\[...\\], \\(...\\)) are read as literal punctuation by screen readers instead of navigable math.',
+      studentImpact:
+        'Screen reader users cannot navigate fractions, exponents, or roots term-by-term without semantic MathML.',
+      snippet: firstSnippet,
+      autoFixable: true,
+    });
+  }
 
   // Compute compliance score (0 - 100)
   const counts = {

@@ -10,7 +10,27 @@ interface PreviewPaneProps {
 function sanitizeForPreview(html: string): string {
   return DOMPurify.sanitize(html, {
     WHOLE_DOCUMENT: true,
-    ADD_TAGS: ['style', 'iframe', 'video', 'audio', 'track', 'marquee', 'blink'],
+    ADD_TAGS: [
+      'style',
+      'iframe',
+      'video',
+      'audio',
+      'track',
+      'marquee',
+      'blink',
+      'math',
+      'semantics',
+      'mrow',
+      'mi',
+      'mo',
+      'mn',
+      'msup',
+      'msub',
+      'mfrac',
+      'msqrt',
+      'mtext',
+      'annotation',
+    ],
     ADD_ATTR: [
       'target',
       'rel',
@@ -24,6 +44,11 @@ function sanitizeForPreview(html: string): string {
       'kind',
       'label',
       'allowfullscreen',
+      'role',
+      'aria-label',
+      'aria-hidden',
+      'xmlns',
+      'display',
     ],
   });
 }

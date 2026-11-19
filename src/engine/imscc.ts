@@ -140,15 +140,78 @@ export async function parseHtmlFiles(files: File[]): Promise<CoursePackage> {
   };
 }
 
+function registerNewPagesInManifest(xmlText: string, pages: CoursePage[]): string {
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(xmlText, 'application/xml');
+    const resourcesEl = doc.querySelector('resources');
+    if (!resourcesEl) return xmlText;
+
+    const existingHrefs = new Set<string>();
+    resourcesEl.querySelectorAll('resource').forEach((res) => {
+      const href = res.getAttribute('href') || res.querySelector('file')?.getAttribute('href');
+      if (href) existingHrefs.add(href.replace(/^\.?\//, ''));
+    });
+
+    const orgEl = doc.querySelector('organizations > organization');
+    const ns = doc.documentElement.namespaceURI;
+    const createEl = (tag: string) =>
+      ns ? doc.createElementNS(ns, tag) : doc.createElement(tag);
+
+    let modified = false;
+    pages.forEach((page, idx) => {
+      const cleanPath = page.path.replace(/^\.?\//, '');
+      if (existingHrefs.has(cleanPath)) return;
+
+      const resId = `res-accessed-${idx}-${Math.random().toString(36).slice(2, 7)}`;
+      const resEl = createEl('resource');
+      resEl.setAttribute('identifier', resId);
+      resEl.setAttribute('type', 'webcontent');
+      resEl.setAttribute('href', cleanPath);
+      const fileEl = createEl('file');
+      fileEl.setAttribute('href', cleanPath);
+      resEl.appendChild(fileEl);
+      resourcesEl.appendChild(resEl);
+
+      if (orgEl) {
+        const itemEl = createEl('item');
+        itemEl.setAttribute('identifier', `item-${resId}`);
+        itemEl.setAttribute('identifierref', resId);
+        const titleEl = createEl('title');
+        titleEl.textContent = page.title;
+        itemEl.appendChild(titleEl);
+        orgEl.appendChild(itemEl);
+      }
+      modified = true;
+    });
+
+    if (!modified) return xmlText;
+    return new XMLSerializer().serializeToString(doc);
+  } catch {
+    return xmlText;
+  }
+}
+
 export async function exportRemediatedPackage(pkg: CoursePackage): Promise<Blob> {
   if (pkg.zipArrayBuffer) {
     const zip = await JSZip.loadAsync(pkg.zipArrayBuffer);
     for (const page of pkg.pages) {
       zip.file(page.path, page.remediatedHtml);
     }
+    const manifestFile = zip.file('imsmanifest.xml');
+    if (manifestFile) {
+      const xmlText = await manifestFile.async('string');
+      const updatedManifest = registerNewPagesInManifest(xmlText, pkg.pages);
+      zip.file('imsmanifest.xml', updatedManifest);
+    }
     if (pkg.extraFiles) {
       for (const [relPath, content] of Object.entries(pkg.extraFiles)) {
         zip.file(relPath, content);
+      }
+    }
+    if (pkg.extraBinaryFiles) {
+      for (const [relPath, bytes] of Object.entries(pkg.extraBinaryFiles)) {
+        zip.file(relPath, bytes);
       }
     }
     return zip.generateAsync({ type: 'blob' });
@@ -163,6 +226,11 @@ export async function exportRemediatedPackage(pkg: CoursePackage): Promise<Blob>
   if (pkg.extraFiles) {
     for (const [relPath, content] of Object.entries(pkg.extraFiles)) {
       zip.file(relPath, content);
+    }
+  }
+  if (pkg.extraBinaryFiles) {
+    for (const [relPath, bytes] of Object.entries(pkg.extraBinaryFiles)) {
+      zip.file(relPath, bytes);
     }
   }
   return zip.generateAsync({ type: 'blob' });

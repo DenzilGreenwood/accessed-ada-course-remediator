@@ -98,6 +98,46 @@ export function auditPdfBuffer(
   };
 }
 
+/** Namespace-agnostic element lookup that works across browsers and jsdom */
+export function getElementsByLocalName(
+  root: Document | Element,
+  localName: string
+): Element[] {
+  const all = root.getElementsByTagName('*');
+  const out: Element[] = [];
+  const suffix = `:${localName}`;
+  for (let i = 0; i < all.length; i++) {
+    const el = all[i];
+    if (
+      el.localName === localName ||
+      el.tagName === localName ||
+      el.tagName.endsWith(suffix)
+    ) {
+      out.push(el);
+    }
+  }
+  return out;
+}
+
+/** Checks if an OOXML cNvPr or docPr element is marked decorative via adec:decorative val="1" */
+export function isOoxmlElementDecorative(el: Element): boolean {
+  const all = el.getElementsByTagName('*');
+  for (let i = 0; i < all.length; i++) {
+    const node = all[i];
+    if (node.localName === 'decorative' && node.getAttribute('val') === '1') {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Checks whether an OOXML cNvPr or docPr element has alt text in descr or title */
+export function getOoxmlAltText(el: Element): string {
+  const descr = el.getAttribute('descr')?.trim() || '';
+  if (descr) return descr;
+  return el.getAttribute('title')?.trim() || '';
+}
+
 /** Audits a .pptx slide deck inside an LMS archive for missing image alt text */
 export async function auditPptxBuffer(
   path: string,
@@ -109,16 +149,28 @@ export async function auditPptxBuffer(
     const slideFiles = Object.values(zip.files).filter(
       (f) => !f.dir && /^ppt\/slides\/slide\d+\.xml$/i.test(f.name)
     );
+    const parser = new DOMParser();
     let totalPics = 0;
     let missingAltPics = 0;
 
     for (const slide of slideFiles) {
-      const xml = await slide.async('string');
-      const picMatches = xml.match(/<p:pic\b[\s\S]*?<\/p:pic>/g) || [];
-      totalPics += picMatches.length;
-      for (const pic of picMatches) {
-        const hasDescr = /\bdescr="[^"]+"/i.test(pic);
-        if (!hasDescr) missingAltPics += 1;
+      const xmlText = await slide.async('string');
+      const doc = parser.parseFromString(xmlText, 'application/xml');
+      const picEls = getElementsByLocalName(doc, 'pic');
+
+      for (const pic of picEls) {
+        totalPics += 1;
+        const cNvPr = getElementsByLocalName(pic, 'cNvPr')[0] || null;
+        if (!cNvPr) {
+          missingAltPics += 1;
+          continue;
+        }
+        if (isOoxmlElementDecorative(cNvPr)) {
+          continue;
+        }
+        if (!getOoxmlAltText(cNvPr)) {
+          missingAltPics += 1;
+        }
       }
     }
 
@@ -132,9 +184,9 @@ export async function auditPptxBuffer(
         status: 'critical',
         summary: `PowerPoint (${slideFiles.length} slides) — ${missingAltPics} image${missingAltPics === 1 ? '' : 's'} missing alt text`,
         details: [
-          `Inspected ${slideFiles.length} slides and ${totalPics} embedded images.`,
-          `${missingAltPics} image(s) have no alt-text description (descr attribute).`,
-          'Action: Run PowerPoint Accessibility Checker (Review → Check Accessibility) to add alt text and verify slide reading order.',
+          `Inspected ${slideFiles.length} slides and ${totalPics} embedded images (checked descr, title, and decorative flags).`,
+          `${missingAltPics} non-decorative image(s) have no alt-text description.`,
+          'Action: Expand this attachment below to add alt text or mark images decorative in-place, or extract an accessible HTML outline.',
         ],
         wcagCriterion: '1.1.1 Non-text Content',
       };
@@ -149,7 +201,7 @@ export async function auditPptxBuffer(
       status: 'review',
       summary: `PowerPoint (${slideFiles.length} slides) — Verify reading order & contrast`,
       details: [
-        `Inspected ${slideFiles.length} slides (${totalPics} images all have alt text).`,
+        `Inspected ${slideFiles.length} slides (${totalPics} images all have alt text or are marked decorative).`,
         'Action: Spot-check slide reading order and color contrast in PowerPoint Accessibility Checker.',
       ],
       wcagCriterion: '1.3.2 / 1.4.3',
@@ -182,18 +234,22 @@ export async function auditDocxBuffer(
       throw new Error('Missing word/document.xml');
     }
     const xml = await docXmlFile.async('string');
-    const docPrs = xml.match(/<wp:docPr\b[^>]*>/g) || [];
-    const missingAlt = docPrs.filter((tag) => !/\bdescr="[^"]+"/i.test(tag)).length;
+    const doc = new DOMParser().parseFromString(xml, 'application/xml');
+    const docPrs = getElementsByLocalName(doc, 'docPr');
+
+    const missingAlt = docPrs.filter(
+      (el) => !isOoxmlElementDecorative(el) && !getOoxmlAltText(el)
+    ).length;
     const hasHeadingStyles = /pStyle\s+w:val="Heading\d"/i.test(xml);
 
     const details: string[] = [];
     if (missingAlt > 0) {
-      details.push(`${missingAlt} embedded image(s) missing alt text.`);
+      details.push(`${missingAlt} non-decorative embedded image(s) missing alt text (checked descr, title, and decorative flags).`);
     }
     if (!hasHeadingStyles) {
       details.push('No Word Heading styles (Heading 1/2/3) detected.');
     }
-    details.push('Action: Open in Microsoft Word → Review → Check Accessibility.');
+    details.push('Action: Expand this attachment below to repair image alt text in-place or extract an accessible HTML outline.');
 
     return {
       id: `att-${path}`,
