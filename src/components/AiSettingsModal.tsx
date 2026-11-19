@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ExternalLink, Sparkles, X } from 'lucide-react';
+import { AlertTriangle, ExternalLink, Sparkles, X } from 'lucide-react';
 import type { AiConfig, AiProvider } from '../types';
 import { estimateAiCostLabel, isChromeLocalAiAvailable } from '../engine/aiEnhancer';
 
@@ -106,10 +106,19 @@ export function AiSettingsModal({ config, onSave, onClose }: AiSettingsModalProp
                     ? 'Chrome Built-In AI Detected!'
                     : 'Experimental On-Device AI (Chrome 138+)'}
                 </h3>
-                <p style={{ margin: 0 }}>
+                <p style={{ margin: '0 0 8px' }}>
                   {chromeAiReady
-                    ? 'Your browser supports Chrome’s on-device Gemini Nano Prompt API. Alt-text drafts, link rewrites, and plain-language summaries will run 100% offline with zero API key or cost.'
+                    ? 'Your browser supports Chrome’s on-device Gemini Nano Prompt API. Supported text tasks run 100% locally with zero API key or cloud inference.'
                     : 'Not detected in this browser yet. To try it offline, use Chrome 138+ with the Prompt API enabled—or select Google Gemini API above for a free key.'}
+                </p>
+                <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                  <strong>Limitations:</strong> Chrome Built-In AI is <strong>text-only</strong> (alt-text
+                  drafts from filename/context, link rewriting, plain-language summaries, and ASCII
+                  diagram descriptions). It does <strong>not</strong> support image/vision tasks
+                  (scanned PDF Vision, Office image inspection, code/equation screenshots, or
+                  chart-to-table extraction)—those use offline Tesseract OCR / manual editors or
+                  require Gemini/OpenAI. Sessions are destroyed after each prompt, though Chrome’s
+                  own browser telemetry/crash-reporting settings still apply.
                 </p>
               </div>
             ) : (
@@ -174,6 +183,33 @@ export function AiSettingsModal({ config, onSave, onClose }: AiSettingsModalProp
                     />
                   </div>
                 )}
+
+                <div
+                  role="note"
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #f59e0b',
+                    background: '#fffbeb',
+                    color: '#78350f',
+                    fontSize: '0.8rem',
+                    lineHeight: 1.5,
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, marginBottom: 4 }}>
+                    <AlertTriangle size={14} aria-hidden="true" />
+                    Data Privacy &amp; AI Training Disclaimer
+                  </div>
+                  When using an external AI API key, course text, images, PDF pages, or media snippets
+                  you choose to enhance are sent directly from your browser to that provider.{' '}
+                  <strong>
+                    Depending on your API plan (especially free-tier keys), the provider may retain
+                    or use submitted data to train or improve its models.
+                  </strong>{' '}
+                  Do not submit FERPA-protected student records or sensitive/proprietary materials
+                  unless your institution’s paid API agreement guarantees zero data retention—or
+                  keep AI disabled and use AccessEd’s 100% offline engine.
+                </div>
               </>
             )}
           </div>
