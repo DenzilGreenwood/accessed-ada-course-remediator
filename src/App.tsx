@@ -42,9 +42,22 @@ import {
   updateImageAltInHtml,
   updateLinkTextInHtml,
 } from './engine/remediator';
-import { exportRemediatedPackage } from './engine/imscc';
-import { generateComplianceReportMarkdown } from './engine/report';
-import { generatePlainLanguageSummaryWithAi } from './engine/aiEnhancer';
+import { createCoursePage, exportRemediatedPackage } from './engine/imscc';
+import {
+  generateOfficeImageAltWithAi,
+  generatePlainLanguageSummaryWithAi,
+  isVisionAiReady,
+} from './engine/aiEnhancer';
+import {
+  convertPdfToAccessibleHtml,
+  type PdfConversionProgress,
+} from './engine/pdfRemediator';
+import {
+  applyOfficeImageFixes,
+  extractOfficeHtmlOutline,
+  inspectOfficeImages,
+  type OfficeImageItem,
+} from './engine/officeRemediator';
 import { attachCaptionsAndTranscriptToHtml } from './engine/captions';
 import {
   clearWorkspaceFromDb,
