@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>Lab 3: Debugging Heap Corruption with Valgrind &amp; GDB</title>
+</head>
+<body>
+  <h1>Lab 3: Diagnosing Heap Corruption &amp; Dangling Pointers</h1>
+  <p>Below is sample terminal output from running <code>valgrind --leak-check=full ./avl_test</code> on a buggy destructor:</p>
+
+  <img src="media/valgrind_memcheck_segfault.png" width="640" height="320">
+
+  <p><b style="font-size: 18px;">Live GDB Walkthrough Video</b></p>
+  <video src="media/gdb-backtrace-walkthrough.mp4" autoplay controls width="560"></video>
+
+  <form action="/submit-lab-checkoff">
+    <p>Lab TA Checkoff Verification:</p>
+    <input type="text" placeholder="Enter GitHub commit SHA" tabindex="3">
+    <button type="submit" tabindex="1"></button>
+  </form>
+</body>
+</html>

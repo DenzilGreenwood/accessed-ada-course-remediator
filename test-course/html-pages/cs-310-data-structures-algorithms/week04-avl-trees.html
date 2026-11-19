@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>Week 4: AVL Trees &amp; Asymptotic Complexity</title>
+</head>
+<body>
+  <h1>Week 4: Self-Balancing Binary Search Trees (AVL)</h1>
+  <p>An AVL tree maintains the invariant that for every node <em>v</em>, the heights of its left and right subtrees differ by at most 1.</p>
+
+  <p><b style="font-size: 18px;">1. Left-Right (LR) Double Rotation</b></p>
+  <img src="media/avl_lr_rotation_v2.png" alt="avl_lr_rotation_v2.png" width="520" height="280">
+  <p>To inspect the step-by-step pointer reassignment trace, <a href="https://example.edu/cs310/avl-trace">read more</a>.</p>
+
+  <h3>2. C++ Node Rotation Implementation</h3>
+  <pre><code>Node* rotateRight(Node* y) {
+    Node* x = y->left;
+    Node* T2 = x->right;
+    x->right = y;
+    y->left = T2;
+    y->height = 1 + std::max(height(y->left), height(y->right));
+    x->height = 1 + std::max(height(x->left), height(x->right));
+    return x;
+}</code></pre>
+
+  <h3>3. Worst-Case vs. Amortized Complexity</h3>
+  <table border="1" cellpadding="6">
+    <tr>
+      <td>Data Structure</td>
+      <td>Search (Worst)</td>
+      <td>Insert (Worst)</td>
+      <td>Space</td>
+    </tr>
+    <tr>
+      <td>Unbalanced BST</td>
+      <td>O(n)</td>
+      <td>O(n)</td>
+      <td>O(n)</td>
+    </tr>
+    <tr>
+      <td>AVL Tree</td>
+      <td>O(log n)</td>
+      <td>O(log n)</td>
+      <td>O(n)</td>
+    </tr>
+    <tr>
+      <td>Hash Table (Chaining)</td>
+      <td>O(n)</td>
+      <td>O(1) amortized</td>
+      <td>O(n)</td>
+    </tr>
+  </table>
+</body>
+</html>
