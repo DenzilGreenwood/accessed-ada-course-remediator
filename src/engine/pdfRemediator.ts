@@ -1,4 +1,5 @@
 import * as pdfjsLib from 'pdfjs-dist';
+import DOMPurify from 'dompurify';
 import { createWorker } from 'tesseract.js';
 import type { AiConfig, CourseContext } from '../types';
 import { extractPdfPageHtmlWithVisionAi, isVisionAiReady } from './aiEnhancer';
@@ -186,13 +187,17 @@ export async function convertPdfToAccessibleHtml(
           totalPages,
           stage: `Extracting structured HTML via Vision AI (page ${pageNum}/${totalPages})...`,
         });
-        pageHtml = await extractPdfPageHtmlWithVisionAi(
+        const rawAiHtml = await extractPdfPageHtmlWithVisionAi(
           options.aiConfig,
           dataUrl,
           pageNum,
           totalPages,
           options.courseContext
         );
+        pageHtml = DOMPurify.sanitize(rawAiHtml, {
+          USE_PROFILES: { html: true, mathMl: true },
+          FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'form'],
+        });
       } else if (ocrWorker) {
         options?.onProgress?.({
           page: pageNum,

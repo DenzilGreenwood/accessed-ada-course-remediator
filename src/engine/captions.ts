@@ -243,6 +243,18 @@ export function generateScreenReaderPreview(html: string): {
     if (['script', 'style', 'noscript', 'head'].includes(tag)) return;
     if (el.getAttribute('aria-hidden') === 'true') return;
 
+    const roleAttr = el.getAttribute('role')?.toLowerCase();
+    if (roleAttr === 'math') {
+      const label = el.getAttribute('aria-label')?.trim() || (el.textContent || '').trim();
+      push('Math', label || 'Mathematical equation');
+      return;
+    }
+    if (roleAttr === 'img') {
+      const label = el.getAttribute('aria-label')?.trim() || el.querySelector('figcaption')?.textContent?.trim();
+      push('Diagram / Image', label || 'Labeled figure', !label ? 'Missing aria-label on role="img"' : undefined);
+      return;
+    }
+
     if (['header', 'nav', 'main', 'aside', 'footer'].includes(tag)) {
       landmarks.push(tag);
       push('Landmark', `Entered ${tag} region`);

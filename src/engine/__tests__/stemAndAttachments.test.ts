@@ -21,6 +21,11 @@ import {
   replaceImageWithMathMl,
 } from '../remediator';
 import { generateComplianceReportMarkdown } from '../report';
+import {
+  buildRemediatedPreviewHtml,
+  sanitizeForPreview,
+} from '../../components/PreviewPane';
+import { generateScreenReaderPreview } from '../captions';
 
 const TINY_PNG_BYTES = new Uint8Array([
   137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0,
@@ -329,5 +334,28 @@ describe('Capability 5: Complex Charts -> Companion Data Table', () => {
     expect(updated).toContain('<th scope="col">Year</th>');
     expect(updated).toContain('<th scope="row">2024</th>');
     expect(updated).toContain('<td>120</td>');
+  });
+});
+
+describe('Preview Windows & Screen-Reader Simulator', () => {
+  it('preserves MathML, <details>, <figure>, and injects ADA highlight CSS in PreviewPane', () => {
+    const raw = `
+      <figure role="img" aria-label="Binary tree"><pre aria-hidden="true">┌─┐</pre><figcaption>Binary tree</figcaption></figure>
+      <span class="accessed-math" role="math" aria-label="Math equation: x squared"><math xmlns="http://www.w3.org/1998/Math/MathML"><msup><mi>x</mi><mn>2</mn></msup></math></span>
+      <details class="accessed-data-table"><summary>Accessible Data Table: Growth</summary><table><caption>Growth</caption><thead><tr><th scope="col">Year</th></tr></thead></table></details>
+    `;
+    const sanitized = sanitizeForPreview(raw);
+    expect(sanitized).toContain('<math');
+    expect(sanitized).toContain('role="img"');
+    expect(sanitized).toContain('aria-label="Binary tree"');
+    expect(sanitized).toContain('<details');
+
+    const preview = buildRemediatedPreviewHtml(sanitized, true);
+    expect(preview).toContain('id="accessed-preview-helper-css"');
+    expect(preview).toContain('open>');
+
+    const sr = generateScreenReaderPreview(raw);
+    expect(sr.items.some((i) => i.role === 'Diagram / Image' && i.text === 'Binary tree')).toBe(true);
+    expect(sr.items.some((i) => i.role === 'Math' && i.text === 'Math equation: x squared')).toBe(true);
   });
 });
