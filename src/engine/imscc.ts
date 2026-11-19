@@ -1,6 +1,7 @@
 import JSZip from 'jszip';
 import type { CoursePackage, CoursePage } from '../types';
 import { auditHtml, isFullHtmlDocument } from './auditor';
+import { auditArchiveAttachments } from './attachments';
 
 function extractTitleFromHtml(html: string, fallback: string): string {
   const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
@@ -108,12 +109,14 @@ export async function parseCourseArchive(file: File): Promise<CoursePackage> {
   }
 
   pages.sort((a, b) => a.path.localeCompare(b.path));
+  const attachments = await auditArchiveAttachments(zip);
 
   return {
     name: courseName,
     sourceType: file.name.toLowerCase().endsWith('.imscc') ? 'imscc' : 'zip',
     originalFileName: file.name,
     zipArrayBuffer: buffer,
+    attachments,
     pages,
   };
 }

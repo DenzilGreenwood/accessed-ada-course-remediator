@@ -680,11 +680,11 @@ export function remediateHtml(
       (el) => parseInt(el.getAttribute('tabindex') || '0', 10) > 0
     );
     positiveTab.forEach((el) => {
-      el.setAttribute('tabindex', '0');
+      el.removeAttribute('tabindex');
       record(
         'positive-tabindex',
         '2.4.3 Focus Order',
-        'Normalized positive tabindex values to preserve natural keyboard order'
+        'Removed positive tabindex attributes to preserve natural keyboard order'
       );
     });
   }
@@ -745,4 +745,32 @@ export function updateLinkTextInHtml(html: string, linkIndex: number, newText: s
     target.appendChild(srOnly);
   }
   return isFullDoc ? `<!doctype html>\n${doc.documentElement.outerHTML}` : doc.body.innerHTML;
+}
+
+/**
+ * Produces LMS-sanitizer-safe HTML ready to paste directly into Canvas RCE (</>),
+ * Blackboard Ultra, or Moodle: strips <style>, <script>, skip-links, and positive
+ * tabindex attributes while preserving inline contrast/font styles and semantic markup.
+ */
+export function generateLmsSafeHtml(html: string): string {
+  const isFullDoc = isFullHtmlDocument(html);
+  const doc = parseHtmlDocument(html, isFullDoc);
+  const root = doc.querySelector('main') || doc.body;
+  const clone = root.cloneNode(true) as HTMLElement;
+
+  clone.querySelectorAll('style, script, link, meta, .skip-link').forEach((el) => el.remove());
+
+  // Strip any positive tabindex attributes that LMS sanitizers reject or break
+  clone.querySelectorAll('[tabindex]').forEach((el) => {
+    const val = parseInt(el.getAttribute('tabindex') || '0', 10);
+    if (val > 0) el.removeAttribute('tabindex');
+  });
+
+  // Replace .sr-only spans with plain parenthetical text since LMS sanitizers strip custom CSS classes
+  clone.querySelectorAll('.sr-only').forEach((span) => {
+    span.removeAttribute('class');
+    span.setAttribute('style', 'font-size: 0.9em;');
+  });
+
+  return clone.innerHTML.trim();
 }

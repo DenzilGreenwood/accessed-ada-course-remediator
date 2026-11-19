@@ -105,6 +105,23 @@ export const DEFAULT_REMEDIATION_OPTIONS: RemediationOptions = {
   injectAccessibleStyles: true,
 };
 
+export interface AttachmentAudit {
+  id: string;
+  path: string;
+  fileName: string;
+  kind: 'pdf' | 'pptx' | 'docx' | 'media' | 'other';
+  sizeBytes: number;
+  status: 'critical' | 'review' | 'ok';
+  summary: string;
+  details: string[];
+  wcagCriterion: string;
+}
+
+export interface CourseContext {
+  subject: string;
+  level: string;
+}
+
 export interface CoursePage {
   id: string;
   path: string;
@@ -127,10 +144,14 @@ export interface CoursePackage {
   zipArrayBuffer?: ArrayBuffer;
   /** Extra generated/uploaded assets (e.g. .vtt caption files) bundled on export */
   extraFiles?: Record<string, string>;
+  /** Audited non-HTML attachments inside the .imscc/.zip (PDFs, PowerPoints, Word docs) */
+  attachments?: AttachmentAudit[];
+  /** Subject & academic level used to tailor AI alt-text and plain-language prompts */
+  courseContext?: CourseContext;
   pages: CoursePage[];
 }
 
-export type AiProvider = 'gemini' | 'openai';
+export type AiProvider = 'gemini' | 'openai' | 'chrome-nano';
 
 export interface AiConfig {
   enabled: boolean;

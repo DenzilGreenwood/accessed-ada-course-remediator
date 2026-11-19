@@ -61,6 +61,8 @@ export function VideoStudio({
   const [editorTab, setEditorTab] = useState<'captions' | 'descriptions' | 'transcript' | 'html'>('captions');
   const [speakDescriptions, setSpeakDescriptions] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
+  const [aiProgress, setAiProgress] = useState<string | null>(null);
+  const [compressionNote, setCompressionNote] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -221,14 +223,19 @@ export function VideoStudio({
       return;
     }
     setError(null);
+    setCompressionNote(null);
     setAiLoading(true);
+    setAiProgress('Preparing video locally...');
     try {
-      const result = await transcribeVideoWithGemini(aiConfig, videoFile);
+      const result = await transcribeVideoWithGemini(aiConfig, videoFile, (msg) =>
+        setAiProgress(msg)
+      );
       const capCues = parseVttCues(result.captionsVtt);
       const descCues = parseVttCues(result.descriptionsVtt);
       setCaptionCues(capCues);
       setDescriptionCues(descCues);
       setTranscriptText(parseCaptionsToTranscript(result.captionsVtt));
+      setCompressionNote(result.compressionNote);
       onStatus?.(
         `AI generated ${capCues.length} caption cues and ${descCues.length} visual descriptions!`
       );
@@ -236,6 +243,7 @@ export function VideoStudio({
       setError(err instanceof Error ? err.message : 'AI video transcription failed.');
     } finally {
       setAiLoading(false);
+      setAiProgress(null);
     }
   }
 
@@ -509,6 +517,22 @@ export function VideoStudio({
           {error && (
             <div className="alert-error" role="alert" style={{ marginTop: 0, marginBottom: 14 }}>
               {error}
+            </div>
+          )}
+
+          {aiProgress && (
+            <div className="info-callout" role="status" style={{ marginTop: 0, marginBottom: 14 }}>
+              <strong>Processing locally:</strong> {aiProgress}
+            </div>
+          )}
+
+          {compressionNote && !aiProgress && (
+            <div
+              className="empty-success"
+              role="status"
+              style={{ padding: '10px 14px', marginBottom: 14, textAlign: 'left', fontSize: '0.84rem' }}
+            >
+              <strong>Local compression applied:</strong> {compressionNote}
             </div>
           )}
 

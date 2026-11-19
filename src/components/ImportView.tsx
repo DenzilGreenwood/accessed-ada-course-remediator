@@ -15,6 +15,7 @@ import {
   parseCourseArchive,
   parseHtmlFiles,
 } from '../engine/imscc';
+import { importWorkspaceFile } from '../engine/storage';
 import { buildSampleCourse } from '../data/sampleCourse';
 
 interface ImportViewProps {
@@ -39,7 +40,10 @@ export function ImportView({ onCourseLoaded, onOpenVideoStudio }: ImportViewProp
     try {
       const files = Array.from(fileList);
       const first = files[0];
-      if (/\.(imscc|zip)$/i.test(first.name)) {
+      if (/\.(accessed|json)$/i.test(first.name)) {
+        const pkg = await importWorkspaceFile(first);
+        onCourseLoaded(pkg);
+      } else if (/\.(imscc|zip)$/i.test(first.name)) {
         const pkg = await parseCourseArchive(first);
         if (pkg.pages.length === 0) {
           setError('No HTML course pages were found inside this archive.');
@@ -49,7 +53,7 @@ export function ImportView({ onCourseLoaded, onOpenVideoStudio }: ImportViewProp
       } else {
         const htmlFiles = files.filter((f) => /\.(html?|xhtml)$/i.test(f.name));
         if (htmlFiles.length === 0) {
-          setError('Please upload a Canvas/Blackboard .imscc package, .zip archive, or .html course files.');
+          setError('Please upload a Canvas/Blackboard .imscc package, .zip archive, .html course files, or a saved .accessed workspace.');
           return;
         }
         const pkg = await parseHtmlFiles(htmlFiles);
@@ -147,13 +151,13 @@ export function ImportView({ onCourseLoaded, onOpenVideoStudio }: ImportViewProp
             </div>
             <h3>Drop your course export or HTML pages here</h3>
             <p>
-              Supports Canvas / Blackboard / D2L <strong>.imscc</strong>, <strong>.zip</strong> packages, and{' '}
-              <strong>.html / .htm</strong> files. Processed locally in your browser.
+              Supports Canvas / Blackboard / D2L <strong>.imscc</strong>, <strong>.zip</strong> packages,{' '}
+              <strong>.html / .htm</strong> files, or saved <strong>.accessed</strong> workspaces.
             </p>
             <input
               ref={fileInputRef}
               type="file"
-              accept=".imscc,.zip,.html,.htm,.xhtml"
+              accept=".imscc,.zip,.html,.htm,.xhtml,.accessed,.json"
               multiple
               className="sr-only"
               aria-label="Choose course files to upload"

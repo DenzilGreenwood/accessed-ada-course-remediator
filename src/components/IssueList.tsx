@@ -7,7 +7,7 @@ import {
   Sparkles,
   Wrench,
 } from 'lucide-react';
-import type { AiConfig, AuditIssue, DisabilityGroup, Severity } from '../types';
+import type { AiConfig, AuditIssue, CourseContext, DisabilityGroup, Severity } from '../types';
 import {
   generateAltTextWithAi,
   generateDescriptiveLinkWithAi,
@@ -16,6 +16,7 @@ import {
 interface IssueListProps {
   issues: AuditIssue[];
   aiConfig: AiConfig;
+  courseContext?: CourseContext;
   onUpdateImageAlt: (imgIndex: number, newAlt: string) => void;
   onUpdateLinkText: (linkIndex: number, newText: string) => void;
 }
@@ -23,6 +24,7 @@ interface IssueListProps {
 export function IssueList({
   issues,
   aiConfig,
+  courseContext,
   onUpdateImageAlt,
   onUpdateLinkText,
 }: IssueListProps) {
@@ -62,7 +64,8 @@ export function IssueList({
         const suggested = await generateAltTextWithAi(
           aiConfig,
           srcMatch ? srcMatch[1] : '',
-          issue.elementRef.context || ''
+          issue.elementRef.context || '',
+          courseContext
         );
         setDraftValues((prev) => ({ ...prev, [issue.id]: suggested }));
       } else if (issue.elementRef.tag === 'a') {
@@ -71,7 +74,8 @@ export function IssueList({
           aiConfig,
           hrefMatch ? hrefMatch[1] : '',
           issue.elementRef.currentValue || '',
-          issue.elementRef.context || ''
+          issue.elementRef.context || '',
+          courseContext
         );
         setDraftValues((prev) => ({ ...prev, [issue.id]: suggested }));
       }
@@ -201,6 +205,16 @@ export function IssueList({
                           : 'e.g., Download Lab 1 Worksheet (PDF)'
                       }
                     />
+                    {issue.elementRef.tag === 'img' && (
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        title="Marks purely decorative icons/dividers with empty alt so screen readers skip them"
+                        onClick={() => onUpdateImageAlt(issue.elementRef!.index, '')}
+                      >
+                        Mark Decorative (alt=&quot;&quot;)
+                      </button>
+                    )}
                     {aiConfig.enabled && (
                       <button
                         type="button"

@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Sparkles, X } from 'lucide-react';
+import { ExternalLink, Sparkles, X } from 'lucide-react';
 import type { AiConfig, AiProvider } from '../types';
+import { estimateAiCostLabel, isChromeLocalAiAvailable } from '../engine/aiEnhancer';
 
 interface AiSettingsModalProps {
   config: AiConfig;
@@ -15,12 +16,16 @@ export function AiSettingsModal({ config, onSave, onClose }: AiSettingsModalProp
   const [model, setModel] = useState(config.model);
   const [baseUrl, setBaseUrl] = useState(config.baseUrl || 'https://api.openai.com/v1');
 
+  const chromeAiReady = isChromeLocalAiAvailable();
+
   function handleProviderChange(next: AiProvider) {
     setProvider(next);
     if (next === 'gemini') {
       setModel('gemini-2.5-flash');
-    } else {
+    } else if (next === 'openai') {
       setModel('gpt-4o-mini');
+    } else {
+      setModel('gemini-nano');
     }
   }
 
@@ -29,8 +34,14 @@ export function AiSettingsModal({ config, onSave, onClose }: AiSettingsModalProp
     onSave({
       enabled,
       provider,
-      apiKey: apiKey.trim(),
-      model: model.trim() || (provider === 'gemini' ? 'gemini-2.5-flash' : 'gpt-4o-mini'),
+      apiKey: provider === 'chrome-nano' ? '' : apiKey.trim(),
+      model:
+        model.trim() ||
+        (provider === 'gemini'
+          ? 'gemini-2.5-flash'
+          : provider === 'openai'
+            ? 'gpt-4o-mini'
+            : 'gemini-nano'),
       baseUrl: provider === 'openai' ? baseUrl.trim() : undefined,
     });
     onClose();
@@ -58,8 +69,8 @@ export function AiSettingsModal({ config, onSave, onClose }: AiSettingsModalProp
           <div className="modal-body">
             <p className="field-hint" style={{ margin: 0 }}>
               AccessEd’s core WCAG 2.1 AA remediation engine works <strong>100% offline</strong>.
-              Enable an optional AI API key to generate contextual image alt text, rewrite vague
-              links, and create plain-language student summaries. Your key is saved only in your
+              Enable optional AI to generate subject-aware image alt text, rewrite vague links,
+              auto-caption videos, and create plain-language summaries. Keys stay strictly in your
               browser’s local storage.
             </p>
 
@@ -69,7 +80,7 @@ export function AiSettingsModal({ config, onSave, onClose }: AiSettingsModalProp
                 checked={enabled}
                 onChange={(e) => setEnabled(e.target.checked)}
               />
-              Enable AI-assisted alt text, link rewriting &amp; plain-language summaries
+              Enable AI-assisted alt text, link rewriting, summaries &amp; video captions
             </label>
 
             <div className="field-group">
@@ -80,47 +91,90 @@ export function AiSettingsModal({ config, onSave, onClose }: AiSettingsModalProp
                 value={provider}
                 onChange={(e) => handleProviderChange(e.target.value as AiProvider)}
               >
-                <option value="gemini">Google Gemini API</option>
+                <option value="gemini">Google Gemini API (Recommended — Free Tier Available)</option>
+                <option value="chrome-nano">
+                  Chrome Built-In Local AI (Gemini Nano — Experimental, No API Key)
+                </option>
                 <option value="openai">OpenAI / OpenAI-Compatible API</option>
               </select>
             </div>
 
-            <div className="field-group">
-              <label htmlFor="ai-key">API Key</label>
-              <input
-                id="ai-key"
-                type="password"
-                className="text-input"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder={provider === 'gemini' ? 'AIza...' : 'sk-...'}
-                autoComplete="off"
-              />
-            </div>
-
-            <div className="field-group">
-              <label htmlFor="ai-model">Model Name</label>
-              <input
-                id="ai-model"
-                type="text"
-                className="text-input"
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-              />
-            </div>
-
-            {provider === 'openai' && (
-              <div className="field-group">
-                <label htmlFor="ai-baseurl">API Base URL</label>
-                <input
-                  id="ai-baseurl"
-                  type="url"
-                  className="text-input"
-                  value={baseUrl}
-                  onChange={(e) => setBaseUrl(e.target.value)}
-                  placeholder="https://api.openai.com/v1"
-                />
+            {provider === 'chrome-nano' ? (
+              <div className="info-callout" style={{ marginTop: 0 }}>
+                <h3>
+                  {chromeAiReady
+                    ? 'Chrome Built-In AI Detected!'
+                    : 'Experimental On-Device AI (Chrome 138+)'}
+                </h3>
+                <p style={{ margin: 0 }}>
+                  {chromeAiReady
+                    ? 'Your browser supports Chrome’s on-device Gemini Nano Prompt API. Alt-text drafts, link rewrites, and plain-language summaries will run 100% offline with zero API key or cost.'
+                    : 'Not detected in this browser yet. To try it offline, use Chrome 138+ with the Prompt API enabled—or select Google Gemini API above for a free key.'}
+                </p>
               </div>
+            ) : (
+              <>
+                <div className="field-group">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                    <label htmlFor="ai-key">API Key</label>
+                    {provider === 'gemini' && (
+                      <a
+                        href="https://aistudio.google.com/apikey"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          fontSize: '0.78rem',
+                          fontWeight: 600,
+                          color: 'var(--accent)',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                        }}
+                      >
+                        Get a free Gemini API key in 30s
+                        <ExternalLink size={12} aria-hidden="true" />
+                      </a>
+                    )}
+                  </div>
+                  <input
+                    id="ai-key"
+                    type="password"
+                    className="text-input"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder={provider === 'gemini' ? 'AIza...' : 'sk-...'}
+                    autoComplete="off"
+                  />
+                </div>
+
+                <div className="field-group">
+                  <label htmlFor="ai-model">Model Name</label>
+                  <input
+                    id="ai-model"
+                    type="text"
+                    className="text-input"
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                  />
+                  <span className="field-hint">
+                    Estimated cost: {estimateAiCostLabel(24, provider)} (typical full course).
+                  </span>
+                </div>
+
+                {provider === 'openai' && (
+                  <div className="field-group">
+                    <label htmlFor="ai-baseurl">API Base URL</label>
+                    <input
+                      id="ai-baseurl"
+                      type="url"
+                      className="text-input"
+                      value={baseUrl}
+                      onChange={(e) => setBaseUrl(e.target.value)}
+                      placeholder="https://api.openai.com/v1"
+                    />
+                  </div>
+                )}
+              </>
             )}
           </div>
 

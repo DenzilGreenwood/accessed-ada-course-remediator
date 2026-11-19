@@ -264,6 +264,17 @@ for (const [relPath, content] of Object.entries(files)) {
   fs.writeFileSync(path.join(pagesDir, flatName), content, 'utf8');
 }
 
+// Include a realistic untagged scanned-image PDF so educators can test PDF attachment auditing
+const scannedImagePdf = `%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Resources << /XObject << /Im0 4 0 R >> >> >> endobj
+4 0 obj << /Type /XObject /Subtype /Image /Width 800 /Height 1000 /BitsPerComponent 8 >> stream
+BINARY_SCAN_DATA
+endstream endobj
+%%EOF`;
+zip.file('files/sadler-committee-scan-1832.pdf', scannedImagePdf);
+
 const imsccBuffer = await zip.generateAsync({ type: 'nodebuffer' });
 const imsccPath = path.join(outDir, 'hist-204-modern-world-history.imscc');
 fs.writeFileSync(imsccPath, imsccBuffer);

@@ -1,5 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
+  AlertCircle,
+  AlertTriangle,
   Check,
   CheckCircle2,
   ClipboardCopy,
@@ -13,7 +15,9 @@ import {
   History,
   Home,
   ListChecks,
+  Paperclip,
   RotateCcw,
+  Save,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
@@ -28,6 +32,7 @@ import {
 } from './types';
 import { auditHtml } from './engine/auditor';
 import {
+  generateLmsSafeHtml,
   remediateHtml,
   updateImageAltInHtml,
   updateLinkTextInHtml,
@@ -36,6 +41,12 @@ import { exportRemediatedPackage } from './engine/imscc';
 import { generateComplianceReportMarkdown } from './engine/report';
 import { generatePlainLanguageSummaryWithAi } from './engine/aiEnhancer';
 import { attachCaptionsAndTranscriptToHtml } from './engine/captions';
+import {
+  clearWorkspaceFromDb,
+  exportWorkspaceFile,
+  loadWorkspaceFromDb,
+  saveWorkspaceToDb,
+} from './engine/storage';
 import { LandingPage } from './components/LandingPage';
 import { ImportView } from './components/ImportView';
 import { IssueList } from './components/IssueList';
@@ -83,14 +94,43 @@ export default function App() {
   const [appMode, setAppMode] = useState<'home' | 'course' | 'video'>('home');
   const [course, setCourse] = useState<CoursePackage | null>(null);
   const [activePageId, setActivePageId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'issues' | 'assistive' | 'preview' | 'log' | 'source'>('issues');
+  const [activeTab, setActiveTab] = useState<
+    'issues' | 'assistive' | 'attachments' | 'preview' | 'log' | 'source'
+  >('issues');
   const [options, setOptions] = useState<RemediationOptions>(DEFAULT_REMEDIATION_OPTIONS);
   const [aiConfig, setAiConfig] = useState<AiConfig>(loadAiConfig);
   const [showAiModal, setShowAiModal] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [copiedHtml, setCopiedHtml] = useState(false);
+  const [copiedLmsHtml, setCopiedLmsHtml] = useState(false);
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
+
+  // Restore crash-proof IndexedDB workspace on startup
+  useEffect(() => {
+    let mounted = true;
+    void loadWorkspaceFromDb().then((saved) => {
+      if (!mounted || !saved?.course) return;
+      setCourse(saved.course);
+      setActivePageId(saved.course.pages[0]?.id || null);
+      setLastSavedAt(new Date(saved.savedAt).toLocaleTimeString());
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  // Auto-save active course workspace to IndexedDB on every edit
+  useEffect(() => {
+    if (!course) return;
+    const timer = setTimeout(() => {
+      void saveWorkspaceToDb(course).then(() => {
+        setLastSavedAt(new Date().toLocaleTimeString());
+      });
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [course]);
 
   const activePage: CoursePage | null = useMemo(() => {
     if (!course || course.pages.length === 0) return null;
@@ -294,20 +334,41 @@ export default function App() {
     if (!activePage) return;
     await navigator.clipboard.writeText(activePage.remediatedHtml);
     setCopiedHtml(true);
-    setStatusMessage('Copied remediated HTML to clipboard.');
+    setStatusMessage('Copied full remediated HTML to clipboard.');
     setTimeout(() => setCopiedHtml(false), 2000);
+  }
+
+  async function handleCopyLmsSafeHtml() {
+    if (!activePage) return;
+    const safeHtml = generateLmsSafeHtml(activePage.remediatedHtml);
+    await navigator.clipboard.writeText(safeHtml);
+    setCopiedLmsHtml(true);
+    setStatusMessage('Copied LMS-safe HTML (ready for Canvas/Blackboard editor) to clipboard.');
+    setTimeout(() => setCopiedLmsHtml(false), 2000);
+  }
+
+  function handleSaveWorkspaceFile() {
+    if (!course) return;
+    const blob = exportWorkspaceFile(course);
+    const base = course.originalFileName.replace(/\.(imscc|zip|html?|accessed|json)$/i, '');
+    downloadBlob(blob, `${base}.accessed`);
+    setStatusMessage(`Saved portable workspace file (${base}.accessed).`);
   }
 
   async function handleGenerateAiSummary() {
     if (!course || !activePage) return;
-    if (!aiConfig.enabled || !aiConfig.apiKey) {
+    if (!aiConfig.enabled || (aiConfig.provider !== 'chrome-nano' && !aiConfig.apiKey)) {
       setShowAiModal(true);
       return;
     }
     setSummaryError(null);
     setSummaryLoading(true);
     try {
-      const summary = await generatePlainLanguageSummaryWithAi(aiConfig, activePage.remediatedHtml);
+      const summary = await generatePlainLanguageSummaryWithAi(
+        aiConfig,
+        activePage.remediatedHtml,
+        course.courseContext
+      );
       setCourse({
         ...course,
         pages: course.pages.map((p) =>
@@ -409,6 +470,15 @@ export default function App() {
                 <button
                   type="button"
                   className="btn btn-secondary btn-sm"
+                  onClick={handleSaveWorkspaceFile}
+                  title="Download portable .accessed workspace file to pause or share with a TA"
+                >
+                  <Save size={15} aria-hidden="true" />
+                  Save Workspace
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
                   onClick={handleExportReport}
                 >
                   <FileText size={15} aria-hidden="true" />
@@ -436,6 +506,8 @@ export default function App() {
                   onClick={() => {
                     setCourse(null);
                     setActivePageId(null);
+                    setLastSavedAt(null);
+                    void clearWorkspaceFromDb();
                   }}
                 >
                   <FolderOpen size={15} aria-hidden="true" />
@@ -527,6 +599,70 @@ export default function App() {
                       </span>
                       <span className="stat-pill-label">Moderate</span>
                     </div>
+                  </div>
+                  {lastSavedAt && (
+                    <p
+                      className="field-hint"
+                      style={{ margin: '10px 0 0', textAlign: 'center' }}
+                    >
+                      Auto-saved locally ({lastSavedAt})
+                    </p>
+                  )}
+                </div>
+              </section>
+
+              <section className="panel" aria-labelledby="context-heading">
+                <div className="panel-header">
+                  <h2 id="context-heading">Course Context (AI Prompts)</h2>
+                </div>
+                <div className="rule-list">
+                  <div className="field-group">
+                    <label htmlFor="ctx-subject" style={{ fontSize: '0.78rem' }}>
+                      Subject Area
+                    </label>
+                    <input
+                      id="ctx-subject"
+                      type="text"
+                      className="text-input"
+                      style={{ minWidth: 0, padding: '6px 8px', fontSize: '0.82rem' }}
+                      value={course.courseContext?.subject || ''}
+                      onChange={(e) =>
+                        setCourse({
+                          ...course,
+                          courseContext: {
+                            subject: e.target.value,
+                            level: course.courseContext?.level || '',
+                          },
+                        })
+                      }
+                      placeholder="e.g., Cellular Biology, World History"
+                    />
+                  </div>
+                  <div className="field-group">
+                    <label htmlFor="ctx-level" style={{ fontSize: '0.78rem' }}>
+                      Academic Level
+                    </label>
+                    <select
+                      id="ctx-level"
+                      className="lang-select"
+                      value={course.courseContext?.level || ''}
+                      onChange={(e) =>
+                        setCourse({
+                          ...course,
+                          courseContext: {
+                            subject: course.courseContext?.subject || '',
+                            level: e.target.value,
+                          },
+                        })
+                      }
+                    >
+                      <option value="">General Education</option>
+                      <option value="Elementary (K-5)">Elementary (K–5)</option>
+                      <option value="Middle School (6-8)">Middle School (6–8)</option>
+                      <option value="High School (9-12)">High School (9–12)</option>
+                      <option value="Undergraduate College">Undergraduate College</option>
+                      <option value="Graduate / Professional">Graduate / Professional</option>
+                    </select>
                   </div>
                 </div>
               </section>
@@ -689,6 +825,24 @@ export default function App() {
                   <button
                     type="button"
                     className="btn btn-secondary btn-sm"
+                    onClick={() => void handleCopyLmsSafeHtml()}
+                    title="Copies clean HTML without <style> blocks for Canvas/Blackboard/Moodle editors"
+                  >
+                    {copiedLmsHtml ? (
+                      <>
+                        <Check size={15} aria-hidden="true" />
+                        Copied LMS HTML!
+                      </>
+                    ) : (
+                      <>
+                        <ClipboardCopy size={15} aria-hidden="true" />
+                        Copy LMS-Safe HTML
+                      </>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
                     disabled={summaryLoading}
                     onClick={() => void handleGenerateAiSummary()}
                   >
@@ -737,6 +891,18 @@ export default function App() {
                   <Ear size={15} aria-hidden="true" />
                   Blind &amp; Deaf/HoH Studio
                 </button>
+                {(course.attachments?.length || 0) > 0 && (
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={activeTab === 'attachments'}
+                    className="tab-btn"
+                    onClick={() => setActiveTab('attachments')}
+                  >
+                    <Paperclip size={15} aria-hidden="true" />
+                    PDFs &amp; Attachments ({course.attachments?.length || 0})
+                  </button>
+                )}
                 <button
                   type="button"
                   role="tab"
@@ -790,6 +956,7 @@ export default function App() {
                   <IssueList
                     issues={activePage.remediatedAudit.issues}
                     aiConfig={aiConfig}
+                    courseContext={course.courseContext}
                     onUpdateImageAlt={handleInlineImageAlt}
                     onUpdateLinkText={handleInlineLinkText}
                   />
@@ -801,6 +968,65 @@ export default function App() {
                     language={options.language}
                     onAttachMediaAccessibility={handleAttachMediaAccessibility}
                   />
+                )}
+
+                {activeTab === 'attachments' && (
+                  <div>
+                    <p className="field-hint" style={{ marginTop: 0, marginBottom: 14 }}>
+                      Non-HTML attachments (PDFs, PowerPoint slides, Word documents, and media files)
+                      found inside your course package are audited below and included in your
+                      downloadable <strong>ADA Compliance Report</strong> as a Manual Action Checklist.
+                    </p>
+                    <div className="issue-list">
+                      {(course.attachments || []).map((att) => (
+                        <article key={att.id} className="issue-card">
+                          <div className="issue-card-head">
+                            <div>
+                              <h3 className="issue-title">{att.fileName}</h3>
+                              <p className="page-item-path" style={{ margin: '2px 0 0' }}>
+                                {att.path} • {(att.sizeBytes / 1024).toFixed(1)} KB
+                              </p>
+                            </div>
+                            <div className="issue-tags">
+                              <span
+                                className={`badge ${
+                                  att.status === 'critical'
+                                    ? 'badge-critical'
+                                    : att.status === 'review'
+                                      ? 'badge-serious'
+                                      : 'badge-success'
+                                }`}
+                              >
+                                {att.status === 'critical' ? (
+                                  <AlertCircle size={12} aria-hidden="true" />
+                                ) : att.status === 'review' ? (
+                                  <AlertTriangle size={12} aria-hidden="true" />
+                                ) : (
+                                  <CheckCircle2 size={12} aria-hidden="true" />
+                                )}
+                                {att.status === 'critical'
+                                  ? 'Critical Barrier'
+                                  : att.status === 'review'
+                                    ? 'Manual Review'
+                                    : 'Tagged / OK'}
+                              </span>
+                              <span className="badge badge-neutral">
+                                WCAG {att.wcagCriterion}
+                              </span>
+                            </div>
+                          </div>
+                          <p className="issue-desc" style={{ fontWeight: 600 }}>
+                            {att.summary}
+                          </p>
+                          <ul className="check-list">
+                            {att.details.map((d, idx) => (
+                              <li key={idx}>{d}</li>
+                            ))}
+                          </ul>
+                        </article>
+                      ))}
+                    </div>
+                  </div>
                 )}
 
                 {activeTab === 'preview' && <PreviewPane page={activePage} />}
@@ -840,7 +1066,24 @@ export default function App() {
                       <span className="field-hint">
                         Ready to paste back into Canvas Rich Content Editor (<code>&lt;/&gt;</code>) or Blackboard Ultra.
                       </span>
-                      <div style={{ display: 'flex', gap: 8 }}>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          className="btn btn-accent btn-sm"
+                          onClick={() => void handleCopyLmsSafeHtml()}
+                        >
+                          {copiedLmsHtml ? (
+                            <>
+                              <Check size={14} aria-hidden="true" />
+                              Copied LMS-Safe HTML!
+                            </>
+                          ) : (
+                            <>
+                              <ClipboardCopy size={14} aria-hidden="true" />
+                              Copy LMS-Safe HTML (Canvas/Blackboard)
+                            </>
+                          )}
+                        </button>
                         <button
                           type="button"
                           className="btn btn-secondary btn-sm"
@@ -849,12 +1092,12 @@ export default function App() {
                           {copiedHtml ? (
                             <>
                               <Check size={14} aria-hidden="true" />
-                              Copied!
+                              Copied Full HTML!
                             </>
                           ) : (
                             <>
                               <ClipboardCopy size={14} aria-hidden="true" />
-                              Copy HTML
+                              Copy Full HTML
                             </>
                           )}
                         </button>
