@@ -21,9 +21,9 @@ export function AiSettingsModal({ config, onSave, onClose }: AiSettingsModalProp
   function handleProviderChange(next: AiProvider) {
     setProvider(next);
     if (next === 'gemini') {
-      setModel('gemini-2.5-flash');
+      setModel('gemini-3.5-flash-lite');
     } else if (next === 'openai') {
-      setModel('gpt-4o-mini');
+      setModel('gpt-6-luna');
     } else {
       setModel('gemini-nano');
     }
@@ -38,9 +38,9 @@ export function AiSettingsModal({ config, onSave, onClose }: AiSettingsModalProp
       model:
         model.trim() ||
         (provider === 'gemini'
-          ? 'gemini-2.5-flash'
+          ? 'gemini-3.5-flash-lite'
           : provider === 'openai'
-            ? 'gpt-4o-mini'
+            ? 'gpt-6-luna'
             : 'gemini-nano'),
       baseUrl: provider === 'openai' ? baseUrl.trim() : undefined,
     });

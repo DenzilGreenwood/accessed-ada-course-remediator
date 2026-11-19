@@ -31,7 +31,7 @@ export function isChromeLocalAiAvailable(): boolean {
   return Boolean(g.LanguageModel?.create || g.ai?.languageModel?.create);
 }
 
-/** Rough client-side cost estimator for Gemini Flash / GPT-4o-mini BYOK usage */
+/** Rough client-side cost estimator for Gemini Flash / GPT-6-luna BYOK usage */
 export function estimateAiCostLabel(itemCount: number, provider: AiConfig['provider']): string {
   if (provider === 'chrome-nano') return 'Free (runs locally on-device in Chrome)';
   const safeCount = Math.max(1, itemCount);
@@ -70,7 +70,7 @@ async function callLlm(config: AiConfig, prompt: string): Promise<string> {
   }
 
   if (config.provider === 'gemini') {
-    const model = config.model || 'gemini-2.5-flash';
+    const model = config.model || 'gemini-3.5-flash-lite';
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
       model
     )}:generateContent?key=${encodeURIComponent(config.apiKey.trim())}`;
@@ -102,7 +102,7 @@ async function callLlm(config: AiConfig, prompt: string): Promise<string> {
       Authorization: `Bearer ${config.apiKey.trim()}`,
     },
     body: JSON.stringify({
-      model: config.model || 'gpt-4o-mini',
+      model: config.model || 'gpt-6-luna',
       temperature: 0.2,
       messages: [
         {
@@ -285,7 +285,7 @@ export async function transcribeVideoWithGemini(
   parts.push({ text: prompt });
 
   onProgress?.('Generating WebVTT captions & audio descriptions with Gemini...');
-  const model = config.model || 'gemini-2.5-flash';
+  const model = config.model || 'gemini-3.5-flash-lite';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
     model
   )}:generateContent?key=${encodeURIComponent(config.apiKey.trim())}`;
@@ -359,7 +359,7 @@ async function callVisionLlm(
       const base64 = await blobToBase64(blob);
       parsed = { mimeType: blob.type || 'image/png', base64 };
     }
-    const model = config.model || 'gemini-2.5-flash';
+    const model = config.model || 'gemini-3.5-flash-lite';
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
       model
     )}:generateContent?key=${encodeURIComponent(config.apiKey.trim())}`;
@@ -400,7 +400,7 @@ async function callVisionLlm(
       Authorization: `Bearer ${config.apiKey.trim()}`,
     },
     body: JSON.stringify({
-      model: config.model || 'gpt-4o-mini',
+      model: config.model || 'gpt-6-luna',
       temperature: 0.2,
       ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
       messages: [
