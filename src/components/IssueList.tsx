@@ -95,12 +95,19 @@ export function IssueList({
   return (
     <div>
       <div className="filter-bar">
-        <div className="filter-pills" role="group" aria-label="Filter issues by severity">
+        <div className="filter-pills" role="group" aria-label="Filter fixes by severity" style={{ alignItems: 'center' }}>
+          <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-muted)', marginRight: 2 }}>
+            Severity:
+          </span>
           {(['all', 'critical', 'serious', 'moderate'] as const).map((level) => {
             const count =
               level === 'all'
                 ? issues.length
                 : issues.filter((i) => i.severity === level).length;
+            const label =
+              level === 'all'
+                ? 'All Fixes Needed'
+                : level.charAt(0).toUpperCase() + level.slice(1);
             return (
               <button
                 key={level}
@@ -109,16 +116,19 @@ export function IssueList({
                 aria-pressed={severityFilter === level}
                 onClick={() => setSeverityFilter(level)}
               >
-                {level.charAt(0).toUpperCase() + level.slice(1)} ({count})
+                {label} ({count})
               </button>
             );
           })}
         </div>
 
-        <div className="filter-pills" role="group" aria-label="Filter issues by student disability need">
+        <div className="filter-pills" role="group" aria-label="Filter fixes by impacted learner group" style={{ alignItems: 'center' }}>
+          <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-muted)', marginRight: 2 }}>
+            Impacted Learners:
+          </span>
           {(
             [
-              { id: 'all', label: 'All Needs' },
+              { id: 'all', label: 'All Learner Groups' },
               { id: 'blind', label: 'Blind / Screen Reader' },
               { id: 'deaf-hoh', label: 'Deaf / Hard of Hearing' },
               { id: 'low-vision', label: 'Low Vision' },
